@@ -1,0 +1,351 @@
+{
+  "name": "Gift Advisor Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gift-advisor",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - Receive Preferences",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "gift-advisor-webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "user_age",
+              "name": "age",
+              "value": "={{ $json.body.age }}",
+              "type": "string"
+            },
+            {
+              "id": "user_gender",
+              "name": "gender",
+              "value": "={{ $json.body.gender }}",
+              "type": "string"
+            },
+            {
+              "id": "user_interests",
+              "name": "interests",
+              "value": "={{ $json.body.interests }}",
+              "type": "string"
+            },
+            {
+              "id": "user_budget",
+              "name": "budget",
+              "value": "={{ $json.body.budget }}",
+              "type": "string"
+            },
+            {
+              "id": "user_occasion",
+              "name": "occasion",
+              "value": "={{ $json.body.occasion }}",
+              "type": "string"
+            },
+            {
+              "id": "user_relationship",
+              "name": "relationship",
+              "value": "={{ $json.body.relationship }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-preferences",
+      "name": "Extract User Preferences",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "model": "gpt-3.5-turbo",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a gift recommendation expert. Based on user preferences, suggest 5 specific gift ideas with detailed descriptions. Format your response as a JSON array with objects containing: giftName, description, estimatedPrice, searchKeywords, category."
+            },
+            {
+              "role": "user",
+              "content": "=Please recommend 5 gift ideas for:\n- Age: {{ $json.age }}\n- Gender: {{ $json.gender }}\n- Interests: {{ $json.interests }}\n- Budget: {{ $json.budget }}\n- Occasion: {{ $json.occasion }}\n- Relationship: {{ $json.relationship }}\n\nProvide specific product suggestions that I can search for online."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 1000
+        },
+        "requestOptions": {}
+      },
+      "id": "ai-recommendations",
+      "name": "AI Gift Recommendations",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.3,
+      "position": [650, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI response and extract gift suggestions\nconst aiResponse = $input.first().json.message.content;\n\nlet giftIdeas;\ntry {\n  // Try to parse as JSON first\n  const jsonMatch = aiResponse.match(/\\[\\s*\\{[\\s\\S]*\\}\\s*\\]/);\n  if (jsonMatch) {\n    giftIdeas = JSON.parse(jsonMatch[0]);\n  } else {\n    // Fallback parsing if AI doesn't return pure JSON\n    giftIdeas = JSON.parse(aiResponse);\n  }\n} catch (error) {\n  // If parsing fails, create a simple structure\n  console.log('Failed to parse AI response, using fallback');\n  giftIdeas = [\n    {\n      giftName: \"Gift Idea 1\",\n      description: \"Please check AI response\",\n      estimatedPrice: \"N/A\",\n      searchKeywords: $input.first().json.interests || \"gift\",\n      category: \"General\"\n    }\n  ];\n}\n\n// Return each gift idea as a separate item for processing\nreturn giftIdeas.map((gift, index) => ({\n  json: {\n    giftIndex: index + 1,\n    giftName: gift.giftName,\n    description: gift.description,\n    estimatedPrice: gift.estimatedPrice,\n    searchKeywords: gift.searchKeywords,\n    category: gift.category,\n    userPreferences: {\n      age: $input.first().json.age,\n      budget: $input.first().json.budget,\n      occasion: $input.first().json.occasion\n    }\n  }\n}));"
+      },
+      "id": "parse-ai-response",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.serpapi.com/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google_shopping"
+            },
+            {
+              "name": "q",
+              "value": "={{ $json.searchKeywords }}"
+            },
+            {
+              "name": "api_key",
+              "value": "={{ $credentials.apiKey }}"
+            },
+            {
+              "name": "num",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "search-products-serpapi",
+      "name": "Search Products (SerpAPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 200],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "serpapi-credentials",
+          "name": "SerpAPI Key"
+        }
+      },
+      "notes": "Uses SerpAPI (100 free searches/month)"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.google.com/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.searchKeywords + ' buy online price' }}"
+            },
+            {
+              "name": "tbm",
+              "value": "shop"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {}
+          }
+        }
+      },
+      "id": "search-products-fallback",
+      "name": "Search Products (Fallback)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 400],
+      "notes": "Fallback if SerpAPI is not available"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process and rank product search results\nconst items = $input.all();\nconst processedGifts = [];\n\nfor (const item of items) {\n  const data = item.json;\n  \n  let products = [];\n  \n  // Check if we have SerpAPI results\n  if (data.shopping_results && Array.isArray(data.shopping_results)) {\n    products = data.shopping_results.slice(0, 3).map(product => ({\n      productName: product.title,\n      price: product.price || product.extracted_price || 'Price not available',\n      link: product.link,\n      source: product.source || 'Online Store',\n      rating: product.rating || 'N/A',\n      thumbnail: product.thumbnail\n    }));\n  }\n  \n  // Create gift suggestion object\n  const giftSuggestion = {\n    giftIndex: data.giftIndex || processedGifts.length + 1,\n    giftName: data.giftName,\n    description: data.description,\n    category: data.category,\n    estimatedPrice: data.estimatedPrice,\n    products: products,\n    bestDeal: products.length > 0 ? products[0] : null,\n    searchKeywords: data.searchKeywords\n  };\n  \n  processedGifts.push({ json: giftSuggestion });\n}\n\n// Sort by best deals (if available) and limit to top 5\nprocessedGifts.sort((a, b) => {\n  // Prioritize items with products found\n  if (a.json.products.length > 0 && b.json.products.length === 0) return -1;\n  if (a.json.products.length === 0 && b.json.products.length > 0) return 1;\n  return 0;\n});\n\nreturn processedGifts.slice(0, 5);"
+      },
+      "id": "process-results",
+      "name": "Process & Rank Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format final response\nconst gifts = $input.all();\n\nconst response = {\n  success: true,\n  requestedAt: new Date().toISOString(),\n  totalSuggestions: gifts.length,\n  userPreferences: gifts[0]?.json?.userPreferences || {},\n  suggestions: gifts.map(item => item.json)\n};\n\nreturn [{ json: response }];"
+      },
+      "id": "format-response",
+      "name": "Format JSON Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "webhook-response",
+      "name": "Send Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": false, \"error\": $json.error || \"An error occurred processing your request\", \"message\": \"Please check your input and try again\" } }}",
+        "options": {
+          "responseCode": 400,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1050, 500]
+    }
+  ],
+  "connections": {
+    "Webhook - Receive Preferences": {
+      "main": [
+        [
+          {
+            "node": "Extract User Preferences",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract User Preferences": {
+      "main": [
+        [
+          {
+            "node": "AI Gift Recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Gift Recommendations": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Search Products (SerpAPI)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Products (Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Products (SerpAPI)": {
+      "main": [
+        [
+          {
+            "node": "Process & Rank Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Products (Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Process & Rank Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process & Rank Results": {
+      "main": [
+        [
+          {
+            "node": "Format JSON Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format JSON Response": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-19T00:00:00.000Z",
+  "versionId": "1"
+}

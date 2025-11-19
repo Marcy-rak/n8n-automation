@@ -1,0 +1,63 @@
+{
+  "examples": [
+    {
+      "name": "Birthday Gift for Friend",
+      "request": {
+        "age": "30",
+        "gender": "female",
+        "interests": "yoga, reading, coffee",
+        "budget": "$50-100",
+        "occasion": "birthday",
+        "relationship": "friend"
+      }
+    },
+    {
+      "name": "Anniversary Gift for Spouse",
+      "request": {
+        "age": "35",
+        "gender": "male",
+        "interests": "gaming, technology, photography",
+        "budget": "$100-200",
+        "occasion": "anniversary",
+        "relationship": "spouse"
+      }
+    },
+    {
+      "name": "Christmas Gift for Parent",
+      "request": {
+        "age": "60",
+        "gender": "female",
+        "interests": "gardening, cooking, travel",
+        "budget": "$50-150",
+        "occasion": "Christmas",
+        "relationship": "parent"
+      }
+    },
+    {
+      "name": "Graduation Gift for Student",
+      "request": {
+        "age": "22",
+        "gender": "non-binary",
+        "interests": "art, music, fashion",
+        "budget": "$30-75",
+        "occasion": "graduation",
+        "relationship": "sibling"
+      }
+    },
+    {
+      "name": "Thank You Gift for Colleague",
+      "request": {
+        "age": "40",
+        "gender": "male",
+        "interests": "wine, golf, business books",
+        "budget": "$25-50",
+        "occasion": "thank you",
+        "relationship": "colleague"
+      }
+    }
+  ],
+  "testCommand": {
+    "description": "Use this cURL command to test the workflow",
+    "example": "curl -X POST YOUR_WEBHOOK_URL -H 'Content-Type: application/json' -d @example-request.json"
+  }
+}
