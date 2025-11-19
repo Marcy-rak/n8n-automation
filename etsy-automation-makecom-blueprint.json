@@ -1,0 +1,497 @@
+{
+  "name": "Etsy AI Automation - Complete Listing & Pinterest Workflow",
+  "flow": [
+    {
+      "id": 1,
+      "module": "google-drive:watchFiles",
+      "version": 3,
+      "parameters": {
+        "watch": "myDrive",
+        "folderId": "/Etsy Main Photos",
+        "recursive": false,
+        "fileTypes": "image"
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 0,
+          "y": 0
+        },
+        "restore": {
+          "expect": {
+            "watch": {
+              "label": "My Drive"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "watch",
+            "type": "select",
+            "label": "Watch",
+            "required": true
+          },
+          {
+            "name": "folderId",
+            "type": "folder",
+            "label": "Folder",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "module": "google-drive:searchFiles",
+      "version": 3,
+      "parameters": {
+        "query": "name contains '{{1.name.split(\"-\")[0]}}' and mimeType contains 'image/' and '{{YOUR_ADDITIONAL_PHOTOS_FOLDER_ID}}' in parents",
+        "maxResults": 9,
+        "orderBy": "name"
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 300,
+          "y": 0
+        },
+        "restore": {},
+        "parameters": [
+          {
+            "name": "query",
+            "type": "text",
+            "label": "Search Query",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "module": "google-drive:downloadAFile",
+      "version": 3,
+      "parameters": {
+        "fileId": "{{1.id}}"
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 600,
+          "y": 0
+        },
+        "restore": {},
+        "parameters": [
+          {
+            "name": "fileId",
+            "type": "file",
+            "label": "File ID",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "module": "anthropic:createMessage",
+      "version": 1,
+      "parameters": {
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 4096,
+        "temperature": 1,
+        "system": "You are an expert Etsy listing creator. Analyze product images and generate optimized listing data in strict JSON format only. No markdown, no code blocks, just raw JSON.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "base64",
+                  "media_type": "{{3.mimeType}}",
+                  "data": "{{base64(3.data)}}"
+                }
+              },
+              {
+                "type": "text",
+                "text": "Analyze this product image and generate a complete Etsy listing data structure. Return ONLY a JSON object with these exact fields:\n\n{\n  \"listing_title\": \"[140 chars max, SEO-optimized, compelling title]\",\n  \"description\": \"[1000 chars max, detailed product description with benefits, features, sizing, materials]\",\n  \"seo_tags\": [\"tag1\", \"tag2\", \"tag3\", \"tag4\", \"tag5\", \"tag6\", \"tag7\", \"tag8\", \"tag9\", \"tag10\", \"tag11\", \"tag12\", \"tag13\"],\n  \"alt_text_base\": \"[concise product description for image alt text, 50 chars max]\",\n  \"product_category_keyword\": \"[single word category: jewelry, clothing, art, home-decor, accessories, etc]\",\n  \"price_usd\": 29.99\n}\n\nRules:\n- listing_title: Maximum 140 characters, include primary keywords\n- description: Maximum 1000 characters, engaging and informative\n- seo_tags: Exactly 13 tags, mix of broad and specific terms, lowercase\n- alt_text_base: Short, descriptive phrase for accessibility\n- product_category_keyword: Single word for category lookup\n- price_usd: Estimated fair market price\n\nReturn ONLY the JSON object, no other text."
+              }
+            ]
+          }
+        ]
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 900,
+          "y": 0
+        },
+        "restore": {
+          "expect": {
+            "model": {
+              "label": "Claude 3.5 Sonnet"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "model",
+            "type": "select",
+            "label": "Model",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "module": "builtin:BasicFeeder",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "array": "{{parseJSON(4.content[].text).seo_tags}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1200,
+          "y": -150,
+          "name": "Tags Iterator"
+        },
+        "restore": {}
+      }
+    },
+    {
+      "id": 6,
+      "module": "util:TextAggregator",
+      "version": 1,
+      "parameters": {
+        "feeder": 5,
+        "aggregateMode": "array"
+      },
+      "mapper": {
+        "value": "{{5.value}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1500,
+          "y": -150,
+          "name": "Tags Aggregator"
+        },
+        "restore": {}
+      }
+    },
+    {
+      "id": 7,
+      "module": "google-sheets:searchRows",
+      "version": 4,
+      "parameters": {
+        "spreadsheetId": "{{YOUR_ETSY_RULES_SPREADSHEET_ID}}",
+        "sheetName": "Sheet1",
+        "searchColumn": "A",
+        "searchValue": "{{parseJSON(4.content[].text).product_category_keyword}}",
+        "matchCase": false,
+        "matchEntireCell": true,
+        "maxResults": 1
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 1200,
+          "y": 0
+        },
+        "restore": {},
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "type": "text",
+            "label": "Spreadsheet ID",
+            "required": true
+          },
+          {
+            "name": "sheetName",
+            "type": "text",
+            "label": "Sheet Name",
+            "required": true
+          }
+        ],
+        "expect": [
+          {
+            "name": "searchColumn",
+            "type": "text",
+            "label": "Search Column",
+            "required": true
+          },
+          {
+            "name": "searchValue",
+            "type": "text",
+            "label": "Search Value",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "module": "builtin:BasicFeeder",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "array": "{{array(1, 2)}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1500,
+          "y": 150,
+          "name": "Images Array Builder"
+        },
+        "restore": {},
+        "notes": "Creates array combining main image and additional images"
+      }
+    },
+    {
+      "id": 9,
+      "module": "util:SetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          {
+            "name": "all_images",
+            "value": "{{if(2.__IMTLENGTH__ > 0, array(1, 2.files[]), array(1))}}"
+          },
+          {
+            "name": "listing_data",
+            "value": "{{parseJSON(4.content[].text)}}"
+          }
+        ],
+        "scope": "roundtrip"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1800,
+          "y": 0
+        },
+        "restore": {}
+      }
+    },
+    {
+      "id": 10,
+      "module": "etsy:createDraftListing",
+      "version": 1,
+      "parameters": {
+        "shop_id": "{{YOUR_ETSY_SHOP_ID}}"
+      },
+      "mapper": {
+        "quantity": 999,
+        "title": "{{9.listing_data.listing_title}}",
+        "description": "{{9.listing_data.description}}",
+        "price": "{{9.listing_data.price_usd}}",
+        "who_made": "i_did",
+        "when_made": "made_to_order",
+        "taxonomy_id": "{{7.0.B}}",
+        "shipping_profile_id": "{{7.0.D}}",
+        "materials": "{{split(7.0.C, \",\")}}",
+        "tags": "{{6.array[]}}",
+        "is_supply": false,
+        "is_customizable": true,
+        "should_auto_renew": true,
+        "state": "draft"
+      },
+      "metadata": {
+        "designer": {
+          "x": 2100,
+          "y": 0
+        },
+        "restore": {},
+        "parameters": [
+          {
+            "name": "shop_id",
+            "type": "text",
+            "label": "Shop ID",
+            "required": true
+          }
+        ],
+        "notes": "Creates draft listing with AI-generated data and Sheet config"
+      }
+    },
+    {
+      "id": 11,
+      "module": "builtin:BasicFeeder",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "array": "{{if(2.__IMTLENGTH__ > 0, array(3, 2.files[]), array(3))}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 2400,
+          "y": 0,
+          "name": "Image Upload Iterator"
+        },
+        "restore": {},
+        "notes": "Iterates through all images (main + additional)"
+      }
+    },
+    {
+      "id": 12,
+      "module": "google-drive:downloadAFile",
+      "version": 3,
+      "parameters": {
+        "fileId": "{{if(11.id, 11.id, 1.id)}}"
+      },
+      "filter": {
+        "name": "Image exists",
+        "conditions": [
+          [
+            {
+              "a": "{{11.id}}",
+              "o": "exist"
+            }
+          ]
+        ]
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 2700,
+          "y": 0
+        },
+        "restore": {}
+      }
+    },
+    {
+      "id": 13,
+      "module": "etsy:uploadListingImage",
+      "version": 1,
+      "parameters": {
+        "shop_id": "{{YOUR_ETSY_SHOP_ID}}",
+        "listing_id": "{{10.listing_id}}"
+      },
+      "mapper": {
+        "image": "{{if(12.data, 12.data, 3.data)}}",
+        "alt_text": "{{9.listing_data.alt_text_base}} - Image {{11.__IMTINDEX__}}",
+        "rank": "{{11.__IMTINDEX__}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 3000,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Uploads each image with generated alt text"
+      }
+    },
+    {
+      "id": 14,
+      "module": "etsy:updateListingProperty",
+      "version": 1,
+      "parameters": {
+        "shop_id": "{{YOUR_ETSY_SHOP_ID}}",
+        "listing_id": "{{10.listing_id}}",
+        "property_name": "state"
+      },
+      "mapper": {
+        "state": "active"
+      },
+      "metadata": {
+        "designer": {
+          "x": 3300,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Publishes the listing (draft to active)"
+      }
+    },
+    {
+      "id": 15,
+      "module": "etsy:updateListingProperty",
+      "version": 1,
+      "parameters": {
+        "shop_id": "{{YOUR_ETSY_SHOP_ID}}",
+        "listing_id": "{{10.listing_id}}",
+        "property_name": "is_promoted"
+      },
+      "mapper": {
+        "is_promoted": true
+      },
+      "metadata": {
+        "designer": {
+          "x": 3600,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Enables Etsy Ads for the listing"
+      }
+    },
+    {
+      "id": 16,
+      "module": "builtin:BasicFeeder",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "array": "{{13.array[]}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 3900,
+          "y": 0,
+          "name": "Pinterest Pin Iterator"
+        },
+        "restore": {},
+        "notes": "Iterates through uploaded images to create Pinterest pins"
+      }
+    },
+    {
+      "id": 17,
+      "module": "pinterest:createPin",
+      "version": 1,
+      "parameters": {
+        "board_id": "{{YOUR_PINTEREST_BOARD_ID}}"
+      },
+      "mapper": {
+        "title": "{{9.listing_data.listing_title}}",
+        "description": "{{9.listing_data.description}}",
+        "link": "{{14.url}}",
+        "media_source": {
+          "source_type": "image_url",
+          "url": "{{16.url_fullxfull}}"
+        },
+        "alt_text": "{{16.alt_text}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 4200,
+          "y": 0
+        },
+        "restore": {},
+        "parameters": [
+          {
+            "name": "board_id",
+            "type": "text",
+            "label": "Board ID",
+            "required": true
+          }
+        ],
+        "notes": "Creates Pinterest pin for each product image"
+      }
+    }
+  ],
+  "metadata": {
+    "instant": true,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false
+    },
+    "designer": {
+      "orphans": []
+    },
+    "zone": "us1.make.com"
+  }
+}
