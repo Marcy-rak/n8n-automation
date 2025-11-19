@@ -1,0 +1,261 @@
+{
+  "name": "Automated Trading Workflow - Simple (No WhatsApp)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define symbols to analyze\nconst symbols = ['EURUSD', 'GBPUSD', 'USDJPY'];\nconst timeframe = 'M30';\n\nreturn symbols.map(symbol => ({\n  json: {\n    symbol,\n    timeframe,\n    marketSummary: `Current market conditions for ${symbol}. Price action showing consolidation. Volume is moderate.`\n  }\n}));"
+      },
+      "id": "set-symbols",
+      "name": "Set Trading Symbols",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n  symbol,\n  direction,\n  confidence,\n  rationale,\n  is_win,\n  created_at\nFROM trade_ideas\nWHERE symbol = '{{ $json.symbol }}'\nORDER BY created_at DESC\nLIMIT 5",
+        "options": {}
+      },
+      "id": "get-rag-context",
+      "name": "Get Recent Trades (RAG)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [680, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build RAG context and Grok prompt\nconst symbol = $('Set Trading Symbols').item.json.symbol;\nconst timeframe = $('Set Trading Symbols').item.json.timeframe;\nconst marketSummary = $('Set Trading Symbols').item.json.marketSummary;\n\nconst historicalTrades = $input.all();\nlet ragContext = 'No historical trades available.';\n\nif (historicalTrades.length > 0) {\n  const contextLines = historicalTrades.map((item, idx) => {\n    const data = item.json;\n    const outcome = data.is_win === true ? '✓ WIN' : \n                    data.is_win === false ? '✗ LOSS' : '⏳ PENDING';\n    return `${idx + 1}. ${data.direction} - ${outcome} (Confidence: ${(data.confidence * 100).toFixed(0)}%)`;\n  });\n  ragContext = contextLines.join('\\n');\n}\n\nconst prompt = `You are a forex trading analyst. Analyze ${symbol} and provide a recommendation.\n\nMarket: ${marketSummary}\n\nRecent trades:\n${ragContext}\n\nRespond with ONLY this JSON (no markdown):\n{\n  \"symbol\": \"${symbol}\",\n  \"timeframe\": \"${timeframe}\",\n  \"direction\": \"LONG|SHORT|FLAT\",\n  \"entry_price\": 1.12345,\n  \"stop_loss\": 1.12000,\n  \"take_profit\": 1.13000,\n  \"confidence\": 0.75,\n  \"rationale\": \"Brief explanation\",\n  \"notes\": \"Optional notes\"\n}`;\n\nreturn {\n  json: {\n    symbol,\n    timeframe,\n    prompt,\n    ragCount: historicalTrades.length\n  }\n};"
+      },
+      "id": "build-prompt",
+      "name": "Build Grok Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.x.ai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"grok-beta\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a trading analyst. Respond with JSON only.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.prompt }}\"\n    }\n  ],\n  \"temperature\": 0.7,\n  \"max_tokens\": 400\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "call-grok",
+      "name": "Call Grok API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "grok-api-key",
+          "name": "Grok API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Grok response\nlet content = $json.choices?.[0]?.message?.content;\n\nif (!content) {\n  throw new Error('No content in Grok response');\n}\n\n// Clean markdown\ncontent = content.trim().replace(/```json\\n?/g, '').replace(/```\\n?/g, '');\n\n// Parse JSON\nconst trade = JSON.parse(content);\n\n// Validate\nif (!trade.symbol || !trade.confidence || !trade.direction) {\n  throw new Error('Invalid trade response');\n}\n\nif (trade.confidence < 0 || trade.confidence > 1) {\n  throw new Error('Invalid confidence value');\n}\n\nreturn { json: trade };"
+      },
+      "id": "parse-response",
+      "name": "Parse & Validate Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.confidence }}",
+              "operation": "largerEqual",
+              "value2": 0.7
+            }
+          ]
+        }
+      },
+      "id": "check-confidence",
+      "name": "Confidence >= 70%?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "trade_ideas",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "symbol": "={{ $json.symbol }}",
+            "timeframe": "={{ $json.timeframe }}",
+            "direction": "={{ $json.direction }}",
+            "entry_price": "={{ $json.entry_price }}",
+            "stop_loss": "={{ $json.stop_loss }}",
+            "take_profit": "={{ $json.take_profit }}",
+            "confidence": "={{ $json.confidence }}",
+            "rationale": "={{ $json.rationale }}",
+            "notes": "={{ $json.notes || '' }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "save-trade",
+      "name": "Save Trade to DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1780, 180],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build email HTML\nconst trade = $('Parse & Validate Response').item.json;\nconst emoji = trade.direction === 'LONG' ? '📈' : trade.direction === 'SHORT' ? '📉' : '⏸️';\nconst conf = (trade.confidence * 100).toFixed(1);\n\nconst risk = Math.abs(trade.entry_price - trade.stop_loss);\nconst reward = Math.abs(trade.take_profit - trade.entry_price);\nconst rr = risk > 0 ? `1:${(reward/risk).toFixed(2)}` : 'N/A';\n\nconst html = `\n<!DOCTYPE html>\n<html>\n<head>\n<style>\n  body { font-family: Arial; background: #f4f4f4; padding: 20px; }\n  .container { background: white; border-radius: 8px; padding: 20px; max-width: 600px; margin: 0 auto; }\n  .header { background: #1a73e8; color: white; padding: 15px; border-radius: 5px; text-align: center; }\n  .info { margin: 20px 0; }\n  .row { padding: 10px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }\n  .label { font-weight: bold; }\n</style>\n</head>\n<body>\n<div class=\"container\">\n  <div class=\"header\"><h2>${emoji} Trade Signal: ${trade.symbol}</h2></div>\n  <div class=\"info\">\n    <div class=\"row\"><span class=\"label\">Direction:</span><span>${trade.direction}</span></div>\n    <div class=\"row\"><span class=\"label\">Entry:</span><span>${trade.entry_price.toFixed(5)}</span></div>\n    <div class=\"row\"><span class=\"label\">Stop Loss:</span><span>${trade.stop_loss.toFixed(5)}</span></div>\n    <div class=\"row\"><span class=\"label\">Take Profit:</span><span>${trade.take_profit.toFixed(5)}</span></div>\n    <div class=\"row\"><span class=\"label\">R/R:</span><span>${rr}</span></div>\n    <div class=\"row\"><span class=\"label\">Confidence:</span><span style=\"font-size:18px;font-weight:bold;color:#1a73e8\">${conf}%</span></div>\n  </div>\n  <div style=\"background:#f8f9fa;padding:15px;border-left:4px solid #1a73e8;margin:15px 0;\">\n    <strong>Analysis:</strong><br>${trade.rationale}\n    ${trade.notes ? `<br><br><strong>Notes:</strong> ${trade.notes}` : ''}\n  </div>\n  <p style=\"text-align:center;color:#888;font-size:12px;\">${new Date().toLocaleString()}</p>\n</div>\n</body>\n</html>\n`;\n\nreturn {\n  json: {\n    subject: `🚨 Trade Signal: ${trade.symbol} ${trade.direction}`,\n    html: html\n  }\n};"
+      },
+      "id": "build-email",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 180]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.EMAIL_FROM }}",
+        "toEmail": "={{ $env.EMAIL_TO }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2220, 180],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "Email SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "analysis_logs",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "REJECTED_LOW_CONFIDENCE",
+            "confidence": "={{ $json.confidence }}",
+            "confidence_threshold": 0.7
+          }
+        },
+        "options": {}
+      },
+      "id": "log-rejected",
+      "name": "Log Rejected",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1780, 420],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [[{ "node": "Set Trading Symbols", "type": "main", "index": 0 }]]
+    },
+    "Set Trading Symbols": {
+      "main": [[{ "node": "Get Recent Trades (RAG)", "type": "main", "index": 0 }]]
+    },
+    "Get Recent Trades (RAG)": {
+      "main": [[{ "node": "Build Grok Prompt", "type": "main", "index": 0 }]]
+    },
+    "Build Grok Prompt": {
+      "main": [[{ "node": "Call Grok API", "type": "main", "index": 0 }]]
+    },
+    "Call Grok API": {
+      "main": [[{ "node": "Parse & Validate Response", "type": "main", "index": 0 }]]
+    },
+    "Parse & Validate Response": {
+      "main": [[{ "node": "Confidence >= 70%?", "type": "main", "index": 0 }]]
+    },
+    "Confidence >= 70%?": {
+      "main": [
+        [{ "node": "Save Trade to DB", "type": "main", "index": 0 }],
+        [{ "node": "Log Rejected", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save Trade to DB": {
+      "main": [[{ "node": "Build Email", "type": "main", "index": 0 }]]
+    },
+    "Build Email": {
+      "main": [[{ "node": "Send Email", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-11-19T00:00:00.000Z",
+  "versionId": "1"
+}

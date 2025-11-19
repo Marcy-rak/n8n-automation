@@ -1,0 +1,734 @@
+{
+  "name": "Automated Trading Workflow with Grok AI & RAG",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "symbol",
+              "name": "symbol",
+              "value": "={{ $json.symbol }}",
+              "type": "string"
+            },
+            {
+              "id": "timeframe",
+              "name": "timeframe",
+              "value": "M30",
+              "type": "string"
+            },
+            {
+              "id": "marketSummary",
+              "name": "marketSummary",
+              "value": "Current market conditions. Price action showing consolidation. Volume is moderate.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-symbols",
+      "name": "Set Trading Symbols",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "split-symbols",
+      "name": "Split Symbols",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n  id,\n  symbol,\n  timeframe,\n  direction,\n  confidence,\n  rationale,\n  is_win,\n  created_at,\n  (embedding <=> (SELECT embedding FROM trade_ideas WHERE symbol = '{{ $json.symbol }}' ORDER BY created_at DESC LIMIT 1)) as similarity\nFROM trade_ideas\nWHERE symbol = '{{ $json.symbol }}'\n  AND embedding IS NOT NULL\nORDER BY created_at DESC\nLIMIT 5",
+        "options": {}
+      },
+      "id": "get-rag-context",
+      "name": "Get RAG Context (pgvector)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        900,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build RAG context string from historical trades\nconst items = $input.all();\n\nif (items.length === 0) {\n  return {\n    json: {\n      ragContext: 'No historical context available.',\n      ragCount: 0\n    }\n  };\n}\n\nconst contextLines = items.map((item, idx) => {\n  const data = item.json;\n  const outcome = data.is_win === true ? '✓ WIN' : \n                  data.is_win === false ? '✗ LOSS' : \n                  '⏳ PENDING';\n  const similarity = data.similarity ? ` (similarity: ${parseFloat(data.similarity).toFixed(3)})` : '';\n  \n  return `${idx + 1}. [${data.created_at.split('T')[0]}] ${data.symbol} ${data.timeframe} - ${data.direction} ${outcome}${similarity}\n   Confidence: ${(parseFloat(data.confidence) * 100).toFixed(1)}%\n   Rationale: ${data.rationale}`;\n});\n\nconst ragContext = contextLines.join('\\n\\n');\n\nreturn {\n  json: {\n    ragContext: ragContext,\n    ragCount: items.length,\n    symbol: items[0].json.symbol\n  }\n};"
+      },
+      "id": "format-rag-context",
+      "name": "Format RAG Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build Grok API prompt with RAG context\nconst symbol = $json.symbol || 'EURUSD';\nconst timeframe = $json.timeframe || 'M30';\nconst marketSummary = $json.marketSummary || 'Current market conditions';\nconst ragContext = $json.ragContext || 'No historical context available.';\n\nconst prompt = `You are an expert forex trading analyst. Analyze the current market conditions and provide a trading recommendation.\n\n**CURRENT MARKET:**\n- Symbol: ${symbol}\n- Timeframe: ${timeframe}\n- Market Summary: ${marketSummary}\n\n**HISTORICAL CONTEXT (Similar Past Trades):**\n${ragContext}\n\n**YOUR TASK:**\nBased on the current market conditions and historical patterns, provide a trading recommendation.\n\n**CRITICAL: You MUST respond with ONLY valid JSON. No markdown, no code blocks, no explanation - just pure JSON.**\n\n**REQUIRED JSON SCHEMA:**\n{\n  \"symbol\": \"${symbol}\",\n  \"timeframe\": \"${timeframe}\",\n  \"direction\": \"LONG\" | \"SHORT\" | \"FLAT\",\n  \"entry_price\": <number>,\n  \"stop_loss\": <number>,\n  \"take_profit\": <number>,\n  \"confidence\": <0.0 to 1.0>,\n  \"rationale\": \"<brief explanation>\",\n  \"notes\": \"<optional risk factors or additional comments>\"\n}\n\n**RULES:**\n1. direction must be exactly \"LONG\", \"SHORT\", or \"FLAT\"\n2. confidence must be between 0.0 and 1.0 (e.g., 0.75 for 75% confidence)\n3. All prices must be realistic for ${symbol}\n4. If market is unclear or risky, use \"FLAT\" and lower confidence\n5. Base your analysis on technical patterns, sentiment, and historical outcomes\n6. Consider win/loss patterns from historical context\n\n**RESPOND WITH JSON ONLY:**`;\n\nreturn {\n  json: {\n    prompt: prompt,\n    symbol: symbol,\n    timeframe: timeframe,\n    ragContext: ragContext,\n    ragCount: $json.ragCount || 0\n  }\n};"
+      },
+      "id": "build-grok-prompt",
+      "name": "Build Grok Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GROK_API_URL || 'https://api.x.ai/v1/chat/completions' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ $env.GROK_MODEL || 'grok-beta' }}\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a precise trading analyst. Always respond with valid JSON only.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.prompt }}\"\n    }\n  ],\n  \"temperature\": 0.7,\n  \"max_tokens\": 500\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "call-grok-api",
+      "name": "Call Grok API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "grok-api-key",
+          "name": "Grok API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and validate Grok response\nconst apiResponse = $json;\nconst startTime = Date.now();\n\n// Extract content from Grok response\nlet content = apiResponse.choices?.[0]?.message?.content;\n\nif (!content) {\n  throw new Error('No content in Grok API response');\n}\n\n// Remove markdown code blocks if present\ncontent = content.trim();\nif (content.startsWith('```')) {\n  content = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '');\n}\n\n// Parse JSON\nlet tradeResponse;\ntry {\n  tradeResponse = JSON.parse(content);\n} catch (error) {\n  throw new Error(`Failed to parse Grok response: ${error.message}`);\n}\n\n// Validate required fields\nconst required = ['symbol', 'timeframe', 'direction', 'entry_price', 'stop_loss', 'take_profit', 'confidence', 'rationale'];\nfor (const field of required) {\n  if (tradeResponse[field] === undefined || tradeResponse[field] === null) {\n    throw new Error(`Missing required field: ${field}`);\n  }\n}\n\n// Validate direction\nif (!['LONG', 'SHORT', 'FLAT'].includes(tradeResponse.direction)) {\n  throw new Error(`Invalid direction: ${tradeResponse.direction}`);\n}\n\n// Validate confidence\nif (tradeResponse.confidence < 0 || tradeResponse.confidence > 1) {\n  throw new Error(`Confidence must be between 0 and 1, got: ${tradeResponse.confidence}`);\n}\n\n// Add metadata\ntradeResponse.raw_response = apiResponse;\ntradeResponse.api_latency_ms = Date.now() - startTime;\ntradeResponse.rag_count = $('Build Grok Prompt').item.json.ragCount;\n\nreturn {\n  json: tradeResponse\n};"
+      },
+      "id": "parse-grok-response",
+      "name": "Parse Grok Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.confidence }}",
+              "operation": "largerEqual",
+              "value2": "={{ parseFloat($env.CONFIDENCE_THRESHOLD || '0.7') }}"
+            }
+          ]
+        }
+      },
+      "id": "check-confidence-threshold",
+      "name": "Confidence >= 0.7?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "analysis_logs",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "REJECTED_LOW_CONFIDENCE",
+            "confidence": "={{ $json.confidence }}",
+            "confidence_threshold": "={{ parseFloat($env.CONFIDENCE_THRESHOLD || '0.7') }}",
+            "grok_response": "={{ JSON.stringify($json.raw_response) }}",
+            "api_latency_ms": "={{ $json.api_latency_ms }}",
+            "rag_context_count": "={{ $json.rag_count }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-rejected-low-confidence",
+      "name": "Log Rejected (Low Confidence)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        2220,
+        480
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ $env.EMBEDDING_MODEL || 'text-embedding-ada-002' }}\",\n  \"input\": \"Symbol: {{ $json.symbol }}, Timeframe: {{ $json.timeframe }}, Direction: {{ $json.direction }}. {{ $json.rationale }}\"\n}",
+        "options": {}
+      },
+      "id": "generate-embedding",
+      "name": "Generate Embedding (OpenAI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2220,
+        120
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai-api-key",
+          "name": "OpenAI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge embedding with trade data\nconst tradeData = $('Parse Grok Response').item.json;\nconst embeddingResponse = $json;\n\nconst embedding = embeddingResponse.data?.[0]?.embedding;\n\nif (!embedding) {\n  throw new Error('No embedding in OpenAI response');\n}\n\nreturn {\n  json: {\n    ...tradeData,\n    embedding: JSON.stringify(embedding)\n  }\n};"
+      },
+      "id": "merge-embedding",
+      "name": "Merge Embedding with Trade",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "trade_ideas",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "symbol": "={{ $json.symbol }}",
+            "timeframe": "={{ $json.timeframe }}",
+            "direction": "={{ $json.direction }}",
+            "entry_price": "={{ $json.entry_price }}",
+            "stop_loss": "={{ $json.stop_loss }}",
+            "take_profit": "={{ $json.take_profit }}",
+            "confidence": "={{ $json.confidence }}",
+            "rationale": "={{ $json.rationale }}",
+            "notes": "={{ $json.notes || '' }}",
+            "embedding": "={{ $json.embedding }}::vector",
+            "raw_response": "={{ JSON.stringify($json.raw_response) }}"
+          }
+        },
+        "options": {
+          "returnFields": "id"
+        }
+      },
+      "id": "save-trade-to-db",
+      "name": "Save Trade to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        2660,
+        120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "analysis_logs",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "SUCCESS",
+            "trade_idea_id": "={{ $json.id }}",
+            "confidence": "={{ $('Merge Embedding with Trade').item.json.confidence }}",
+            "confidence_threshold": "={{ parseFloat($env.CONFIDENCE_THRESHOLD || '0.7') }}",
+            "grok_response": "={{ JSON.stringify($('Merge Embedding with Trade').item.json.raw_response) }}",
+            "api_latency_ms": "={{ $('Merge Embedding with Trade').item.json.api_latency_ms }}",
+            "rag_context_count": "={{ $('Merge Embedding with Trade').item.json.rag_count }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-success",
+      "name": "Log Success",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        2880,
+        120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build email HTML content\nconst trade = $('Merge Embedding with Trade').item.json;\n\nconst directionEmoji = trade.direction === 'LONG' ? '📈' : \n                       trade.direction === 'SHORT' ? '📉' : '⏸️';\nconst confidencePercent = (trade.confidence * 100).toFixed(1);\n\n// Calculate Risk/Reward\nconst risk = Math.abs(trade.entry_price - trade.stop_loss);\nconst reward = Math.abs(trade.take_profit - trade.entry_price);\nconst riskReward = risk > 0 ? `1:${(reward / risk).toFixed(2)}` : 'N/A';\n\nconst html = `\n<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; }\n    .container { background-color: white; border-radius: 8px; padding: 20px; max-width: 600px; margin: 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }\n    .header { background-color: #1a73e8; color: white; padding: 15px; border-radius: 5px; text-align: center; }\n    .trade-info { margin: 20px 0; }\n    .info-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; }\n    .label { font-weight: bold; color: #555; }\n    .value { color: #333; }\n    .direction-long { color: #0f9d58; font-weight: bold; }\n    .direction-short { color: #db4437; font-weight: bold; }\n    .confidence { font-size: 24px; font-weight: bold; color: #1a73e8; }\n    .rationale { background-color: #f8f9fa; padding: 15px; border-left: 4px solid #1a73e8; margin: 15px 0; }\n    .footer { text-align: center; color: #888; font-size: 12px; margin-top: 20px; }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h2>${directionEmoji} New Trade Signal</h2>\n    </div>\n    <div class=\"trade-info\">\n      <div class=\"info-row\">\n        <span class=\"label\">Symbol:</span>\n        <span class=\"value\"><strong>${trade.symbol}</strong></span>\n      </div>\n      <div class=\"info-row\">\n        <span class=\"label\">Direction:</span>\n        <span class=\"value direction-${trade.direction.toLowerCase()}\">${trade.direction}</span>\n      </div>\n      <div class=\"info-row\">\n        <span class=\"label\">Timeframe:</span>\n        <span class=\"value\">${trade.timeframe}</span>\n      </div>\n      <div class=\"info-row\">\n        <span class=\"label\">Entry Price:</span>\n        <span class=\"value\">${parseFloat(trade.entry_price).toFixed(5)}</span>\n      </div>\n      <div class=\"info-row\">\n        <span class=\"label\">Stop Loss:</span>\n        <span class=\"value\">${parseFloat(trade.stop_loss).toFixed(5)}</span>\n      </div>\n      <div class=\"info-row\">\n        <span class=\"label\">Take Profit:</span>\n        <span class=\"value\">${parseFloat(trade.take_profit).toFixed(5)}</span>\n      </div>\n      <div class=\"info-row\">\n        <span class=\"label\">Risk/Reward:</span>\n        <span class=\"value\">${riskReward}</span>\n      </div>\n      <div class=\"info-row\">\n        <span class=\"label\">Confidence:</span>\n        <span class=\"confidence\">${confidencePercent}%</span>\n      </div>\n    </div>\n    <div class=\"rationale\">\n      <strong>Analysis:</strong><br>\n      ${trade.rationale}\n      ${trade.notes ? `<br><br><strong>Notes:</strong> ${trade.notes}` : ''}\n    </div>\n    <div class=\"footer\">\n      <p>Automated Trading Workflow | ${new Date().toLocaleString()}</p>\n    </div>\n  </div>\n</body>\n</html>\n`;\n\nconst subject = `🚨 New Trade Signal: ${trade.symbol} ${trade.direction}`;\n\nreturn {\n  json: {\n    subject: subject,\n    html: html,\n    trade: trade\n  }\n};"
+      },
+      "id": "build-email-content",
+      "name": "Build Email Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3100,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.EMAIL_FROM }}",
+        "toEmail": "={{ $env.EMAIL_TO }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Email Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        3320,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "Email SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build WhatsApp message\nconst trade = $('Build Email Content').item.json.trade;\n\nconst directionEmoji = trade.direction === 'LONG' ? '📈' : \n                       trade.direction === 'SHORT' ? '📉' : '⏸️';\nconst confidencePercent = (trade.confidence * 100).toFixed(1);\n\nconst risk = Math.abs(trade.entry_price - trade.stop_loss);\nconst reward = Math.abs(trade.take_profit - trade.entry_price);\nconst riskReward = risk > 0 ? `1:${(reward / risk).toFixed(2)}` : 'N/A';\n\nconst message = `\n🚨 *NEW TRADE SIGNAL*\n\n${directionEmoji} *${trade.symbol}* - ${trade.direction}\n⏰ ${trade.timeframe}\n\n💰 Entry: ${parseFloat(trade.entry_price).toFixed(5)}\n🛑 Stop Loss: ${parseFloat(trade.stop_loss).toFixed(5)}\n🎯 Take Profit: ${parseFloat(trade.take_profit).toFixed(5)}\n📊 R/R: ${riskReward}\n\n✅ Confidence: *${confidencePercent}%*\n\n📝 ${trade.rationale}\n${trade.notes ? `\\n⚠️ ${trade.notes}` : ''}\n\n_${new Date().toLocaleString()}_\n`.trim();\n\nreturn {\n  json: {\n    message: message\n  }\n};"
+      },
+      "id": "build-whatsapp-message",
+      "name": "Build WhatsApp Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3320,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $env.WHATSAPP_ENABLED }}",
+              "operation": "equals",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "check-whatsapp-enabled",
+      "name": "WhatsApp Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3540,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.twilio.com/2010-04-01/Accounts/{{ $env.TWILIO_ACCOUNT_SID }}/Messages.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "From",
+              "value": "={{ $env.TWILIO_WHATSAPP_FROM }}"
+            },
+            {
+              "name": "To",
+              "value": "={{ $env.TWILIO_WHATSAPP_TO }}"
+            },
+            {
+              "name": "Body",
+              "value": "={{ $('Build WhatsApp Message').item.json.message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send-whatsapp",
+      "name": "Send WhatsApp (Twilio)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3760,
+        180
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "twilio-credentials",
+          "name": "Twilio Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"workflow\": \"Automated Trading Analysis\",\n  \"timestamp\": \"{{ $now }}\",\n  \"status\": \"{{ $('Check Confidence Threshold').item.json.confidence >= parseFloat($env.CONFIDENCE_THRESHOLD || '0.7') ? 'SUCCESS' : 'REJECTED_LOW_CONFIDENCE' }}\",\n  \"symbol\": \"{{ $('Parse Grok Response').item.json.symbol }}\",\n  \"confidence\": \"{{ $('Parse Grok Response').item.json.confidence }}\",\n  \"direction\": \"{{ $('Parse Grok Response').item.json.direction }}\",\n  \"saved_to_db\": \"{{ $('Check Confidence Threshold').item.json.confidence >= parseFloat($env.CONFIDENCE_THRESHOLD || '0.7') }}\",\n  \"notification_sent\": \"{{ $('Check Confidence Threshold').item.json.confidence >= parseFloat($env.CONFIDENCE_THRESHOLD || '0.7') }}\"\n}",
+        "options": {}
+      },
+      "id": "workflow-summary",
+      "name": "Workflow Summary",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        3980,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Set Trading Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Trading Symbols": {
+      "main": [
+        [
+          {
+            "node": "Split Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Symbols": {
+      "main": [
+        [
+          {
+            "node": "Get RAG Context (pgvector)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get RAG Context (pgvector)": {
+      "main": [
+        [
+          {
+            "node": "Format RAG Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format RAG Context": {
+      "main": [
+        [
+          {
+            "node": "Build Grok Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Grok Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call Grok API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Grok API": {
+      "main": [
+        [
+          {
+            "node": "Parse Grok Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Grok Response": {
+      "main": [
+        [
+          {
+            "node": "Confidence >= 0.7?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confidence >= 0.7?": {
+      "main": [
+        [
+          {
+            "node": "Generate Embedding (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Rejected (Low Confidence)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embedding (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "Merge Embedding with Trade",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Embedding with Trade": {
+      "main": [
+        [
+          {
+            "node": "Save Trade to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Trade to Database": {
+      "main": [
+        [
+          {
+            "node": "Log Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Success": {
+      "main": [
+        [
+          {
+            "node": "Build Email Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email Content": {
+      "main": [
+        [
+          {
+            "node": "Send Email Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build WhatsApp Message": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Enabled?": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp (Twilio)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email Notification": {
+      "main": [
+        [
+          {
+            "node": "Workflow Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp (Twilio)": {
+      "main": [
+        [
+          {
+            "node": "Workflow Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Rejected (Low Confidence)": {
+      "main": [
+        [
+          {
+            "node": "Workflow Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-11-19T00:00:00.000Z",
+  "versionId": "1"
+}
