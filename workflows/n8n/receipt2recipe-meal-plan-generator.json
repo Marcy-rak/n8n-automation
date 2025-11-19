@@ -1,0 +1,586 @@
+{
+  "name": "Receipt2Recipe – Meal Plan Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "receipt2recipe",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook – Receipt2Recipe",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "receipt2recipe"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.receipt_file_url }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "if-has-file-url",
+      "name": "IF – Has Receipt File URL?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.body.receipt_file_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "http-download-receipt",
+      "name": "HTTP Request – Download Receipt",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [680, 200],
+      "notes": "Downloads receipt file from URL when provided"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.OCR_API_URL }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "file",
+              "value": "={{ $binary.data }}"
+            }
+          ]
+        },
+        "options": {
+          "bodyContentType": "multipart-form-data"
+        }
+      },
+      "id": "http-ocr",
+      "name": "HTTP Request – OCR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 200],
+      "notes": "OCR_API_URL env var should point to your OCR endpoint\nOCR_API_KEY should be set in HTTP Header credentials",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "OCR_API_CREDENTIALS",
+          "name": "OCR API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Choose receipt text source: direct text or OCR output\nconst items = [];\n\n// Check if we came from webhook directly (no file URL path)\nconst webhookData = $('Webhook – Receipt2Recipe').first().json.body;\n\nlet receiptText = '';\n\n// Priority: receipt_text from webhook if non-empty\nif (webhookData.receipt_text && webhookData.receipt_text.trim()) {\n  receiptText = webhookData.receipt_text.trim();\n} else if ($input.item.json.text) {\n  // Otherwise use OCR output\n  receiptText = $input.item.json.text;\n} else {\n  throw new Error('No receipt text available from either source');\n}\n\n// Pass through all webhook data plus cleaned receipt text\nreturn [{\n  json: {\n    ...webhookData,\n    receipt_text_clean: receiptText\n  }\n}];"
+      },
+      "id": "code-choose-receipt-source",
+      "name": "Code – Choose Receipt Source",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.LLM_API_URL }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ $env.LLM_MODEL || 'gpt-4' }}\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a precise receipt parser. Input: raw grocery receipt text. Output: a JSON array of line items with this exact structure: [{\\\"raw_name\\\":\\\"string\\\",\\\"normalized_name\\\":\\\"string\\\",\\\"quantity\\\":number|null,\\\"unit\\\":\\\"string\\\"|null,\\\"category\\\":\\\"produce|meat|dairy|frozen|pantry|bakery|snacks|beverages|other\\\",\\\"estimated_shelf_life_days\\\":number,\\\"price\\\":number|null,\\\"currency\\\":\\\"string\\\"|null}]. Only return valid JSON array. No comments or explanations.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ $json.receipt_text_clean }}\n    }\n  ],\n  \"temperature\": 0.3\n}",
+        "options": {}
+      },
+      "id": "http-llm-parse-receipt",
+      "name": "HTTP Request – LLM Parse Receipt Items",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1340, 300],
+      "notes": "LLM_API_URL: Your LLM endpoint (OpenAI/Anthropic/etc)\nLLM_API_KEY: Set in HTTP Header credentials\nLLM_MODEL: Optional model override",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LLM_API_CREDENTIALS",
+          "name": "LLM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and parse LLM response for receipt items\nconst webhookData = $('Code – Choose Receipt Source').first().json;\nconst llmResponse = $input.item.json;\n\nlet items = [];\n\n// Handle different LLM response formats\nif (llmResponse.choices && llmResponse.choices[0]?.message?.content) {\n  // OpenAI format\n  const content = llmResponse.choices[0].message.content;\n  items = JSON.parse(content);\n} else if (llmResponse.content && Array.isArray(llmResponse.content)) {\n  // Anthropic format\n  const textContent = llmResponse.content.find(c => c.type === 'text');\n  items = JSON.parse(textContent.text);\n} else if (Array.isArray(llmResponse)) {\n  // Direct array response\n  items = llmResponse;\n} else {\n  throw new Error('Unexpected LLM response format');\n}\n\nif (!Array.isArray(items) || items.length === 0) {\n  throw new Error('No items extracted from receipt');\n}\n\n// Validate structure\nitems.forEach((item, idx) => {\n  if (!item.normalized_name) {\n    throw new Error(`Item ${idx} missing normalized_name`);\n  }\n});\n\nreturn [{\n  json: {\n    ...webhookData,\n    items: items,\n    items_count: items.length\n  }\n}];"
+      },
+      "id": "code-validate-items",
+      "name": "Code – Validate JSON Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "operation": "readRows",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Users",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "user_id",
+              "lookupValue": "={{ $json.user_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gsheet-get-user",
+      "name": "Google Sheets – Get User Profile",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1780, 300],
+      "notes": "GOOGLE_SHEET_ID: Your Google Sheets document ID\nSheet 'Users' should have columns: user_id, dietary_preferences, cooking_skill, max_prep_time_minutes, household_size, notes",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge preferences from webhook and Google Sheets\nconst workflowData = $('Code – Validate JSON Items').first().json;\nconst userRow = $input.item.json;\n\n// Helper to parse array from string or return array\nfunction parseArray(value, fallback = []) {\n  if (Array.isArray(value)) return value;\n  if (typeof value === 'string' && value.trim()) {\n    try {\n      return JSON.parse(value);\n    } catch {\n      return value.split(',').map(s => s.trim());\n    }\n  }\n  return fallback;\n}\n\n// Webhook overrides sheet, with fallbacks\nconst userProfile = {\n  user_id: workflowData.user_id || 'anonymous',\n  plan_tier: workflowData.plan_tier || 'basic',\n  household_size: workflowData.household_size || userRow.household_size || 2,\n  dietary_preferences: workflowData.dietary_preferences || parseArray(userRow.dietary_preferences, ['no_restrictions']),\n  cooking_skill: workflowData.cooking_skill || userRow.cooking_skill || 'beginner',\n  max_prep_time_minutes: workflowData.max_prep_time_minutes || userRow.max_prep_time_minutes || 30\n};\n\nreturn [{\n  json: {\n    items: workflowData.items,\n    items_count: workflowData.items_count,\n    user_profile: userProfile\n  }\n}];"
+      },
+      "id": "code-merge-preferences",
+      "name": "Code – Merge Preferences",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.user_profile.plan_tier }}",
+              "value2": "basic"
+            }
+          ]
+        }
+      },
+      "id": "if-tier-logic",
+      "name": "IF – Tier Logic",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2220, 300],
+      "notes": "Extensibility point for tier-based features:\n- basic: standard meal plan\n- plus: enhanced features (more snacks, detailed instructions)\n- coach: mark for nutritionist review"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.LLM_API_URL }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ $env.LLM_MODEL || 'gpt-4' }}\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an expert meal planner for busy families and health-conscious professionals. You receive: (1) A list of available ingredients from a grocery receipt, (2) A user profile with dietary preferences, cooking skill, max prep time, and household size. You must create a realistic 7-day meal plan that people will actually follow, prioritizing: Using what they already bought (minimize food waste), Simple realistic recipes given their cooking skill and time, Healthy balance over the full week, Creative use of leftovers across multiple meals. OUTPUT FORMAT (valid JSON ONLY): {\\\"plan_metadata\\\":{\\\"week_label\\\":\\\"YYYY-MM-DD to YYYY-MM-DD\\\",\\\"household_size\\\":number,\\\"dietary_preferences\\\":[],\\\"max_prep_time_minutes\\\":number,\\\"estimated_food_waste_reduction_percent\\\":number,\\\"tier\\\":\\\"string\\\"},\\\"days\\\":[{\\\"day\\\":\\\"string\\\",\\\"meals\\\":[{\\\"type\\\":\\\"breakfast|lunch|dinner|snack\\\",\\\"title\\\":\\\"string\\\",\\\"description\\\":\\\"string\\\",\\\"uses_ingredients\\\":[],\\\"additional_ingredients_to_buy\\\":[],\\\"prep_time_minutes\\\":number,\\\"difficulty\\\":\\\"easy|medium|hard\\\",\\\"instructions\\\":[]}]}],\\\"shopping_suggestions\\\":[{\\\"ingredient\\\":\\\"string\\\",\\\"reason\\\":\\\"string\\\"}]}. Only return valid JSON.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Available ingredients: {{ JSON.stringify($json.items) }}\\n\\nUser profile: {{ JSON.stringify($json.user_profile) }}\\n\\nGenerate a 7-day meal plan.\"\n    }\n  ],\n  \"temperature\": 0.7\n}",
+        "options": {}
+      },
+      "id": "http-llm-meal-plan",
+      "name": "HTTP Request – LLM Generate Meal Plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2440, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LLM_API_CREDENTIALS",
+          "name": "LLM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate meal plan JSON\nconst workflowData = $('IF – Tier Logic').first().json;\nconst llmResponse = $input.item.json;\n\nlet mealPlan = {};\n\n// Handle different LLM response formats\nif (llmResponse.choices && llmResponse.choices[0]?.message?.content) {\n  const content = llmResponse.choices[0].message.content;\n  mealPlan = JSON.parse(content);\n} else if (llmResponse.content && Array.isArray(llmResponse.content)) {\n  const textContent = llmResponse.content.find(c => c.type === 'text');\n  mealPlan = JSON.parse(textContent.text);\n} else if (llmResponse.plan_metadata) {\n  mealPlan = llmResponse;\n} else {\n  throw new Error('Unexpected meal plan format');\n}\n\n// Validate structure\nif (!mealPlan.plan_metadata || !mealPlan.days || !Array.isArray(mealPlan.days)) {\n  throw new Error('Invalid meal plan structure');\n}\n\nif (mealPlan.days.length !== 7) {\n  throw new Error('Meal plan must contain exactly 7 days');\n}\n\nreturn [{\n  json: {\n    user_profile: workflowData.user_profile,\n    meal_plan: mealPlan\n  }\n}];"
+      },
+      "id": "code-validate-meal-plan",
+      "name": "Code – Validate Meal Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build human-readable summary\nconst { user_profile, meal_plan } = $input.item.json;\nconst meta = meal_plan.plan_metadata;\n\nconst dietaryText = meta.dietary_preferences.join(', ');\nconst summary = `7-day ${dietaryText} meal plan for household of ${meta.household_size}, max ${meta.max_prep_time_minutes} min prep time. Tier: ${meta.tier}. Week: ${meta.week_label}. Est. food waste reduction: ${meta.estimated_food_waste_reduction_percent}%.`;\n\nreturn [{\n  json: {\n    user_id: user_profile.user_id,\n    plan_tier: meta.tier,\n    week_label: meta.week_label,\n    plan_json: JSON.stringify(meal_plan),\n    summary_text: summary,\n    meal_plan: meal_plan,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "code-build-summary",
+      "name": "Code – Build Summary Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2880, 300]
+    },
+    {
+      "parameters": {
+        "operation": "appendRow",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "MealPlans",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.timestamp }}",
+            "user_id": "={{ $json.user_id }}",
+            "plan_tier": "={{ $json.plan_tier }}",
+            "week_label": "={{ $json.week_label }}",
+            "plan_json": "={{ $json.plan_json }}",
+            "summary_text": "={{ $json.summary_text }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "gsheet-save-plan",
+      "name": "Google Sheets – Save Meal Plan",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [3100, 300],
+      "notes": "Sheet 'MealPlans' should have columns: timestamp, user_id, plan_tier, week_label, plan_json, summary_text",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build final API response\nconst data = $input.item.json;\n\nreturn [{\n  json: {\n    status: 'success',\n    user_id: data.user_id,\n    plan_tier: data.plan_tier,\n    summary: data.summary_text,\n    plan: data.meal_plan\n  }\n}];"
+      },
+      "id": "code-build-response",
+      "name": "Code – Build API Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3320, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [3540, 300]
+    },
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format error response\nconst error = $input.item.json.error;\n\nconst errorResponse = {\n  status: 'error',\n  error_type: error.name || 'UnknownError',\n  message: error.message || 'An unexpected error occurred',\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: errorResponse }];"
+      },
+      "id": "code-format-error",
+      "name": "Code – Format Error Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 600]
+    },
+    {
+      "parameters": {
+        "operation": "appendRow",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Errors",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.timestamp }}",
+            "error_type": "={{ $json.error_type }}",
+            "message": "={{ $json.message }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "gsheet-log-error",
+      "name": "Google Sheets – Log Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 600],
+      "notes": "Optional: Sheet 'Errors' with columns: timestamp, error_type, message",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "respond-error",
+      "name": "Respond Error to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 600]
+    }
+  ],
+  "connections": {
+    "Webhook – Receipt2Recipe": {
+      "main": [
+        [
+          {
+            "node": "IF – Has Receipt File URL?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF – Has Receipt File URL?": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request – Download Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code – Choose Receipt Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request – Download Receipt": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request – OCR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request – OCR": {
+      "main": [
+        [
+          {
+            "node": "Code – Choose Receipt Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code – Choose Receipt Source": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request – LLM Parse Receipt Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request – LLM Parse Receipt Items": {
+      "main": [
+        [
+          {
+            "node": "Code – Validate JSON Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code – Validate JSON Items": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets – Get User Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets – Get User Profile": {
+      "main": [
+        [
+          {
+            "node": "Code – Merge Preferences",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code – Merge Preferences": {
+      "main": [
+        [
+          {
+            "node": "IF – Tier Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF – Tier Logic": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request – LLM Generate Meal Plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request – LLM Generate Meal Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request – LLM Generate Meal Plan": {
+      "main": [
+        [
+          {
+            "node": "Code – Validate Meal Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code – Validate Meal Plan": {
+      "main": [
+        [
+          {
+            "node": "Code – Build Summary Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code – Build Summary Text": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets – Save Meal Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets – Save Meal Plan": {
+      "main": [
+        [
+          {
+            "node": "Code – Build API Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code – Build API Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code – Format Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code – Format Error Response": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets – Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets – Log Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Error to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-01-19T00:00:00.000Z",
+  "versionId": "1"
+}
