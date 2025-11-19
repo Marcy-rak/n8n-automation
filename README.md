@@ -10,6 +10,13 @@ An intelligent n8n workflow that provides personalized gift recommendations base
 - 📊 Returns top 5 gift suggestions with detailed information
 - 🚀 Simple webhook API integration
 - 💻 Frontend-ready JSON response format
+- 🎨 Beautiful HTML frontend included (see [FRONTEND.md](FRONTEND.md))
+
+## Quick Links
+
+- **[HTML Frontend Documentation](FRONTEND.md)** - Setup and use the included web interface
+- **[API Examples](example-request.json)** - Sample requests for testing
+- **[Environment Setup](.env.example)** - API keys configuration template
 
 ## Workflow Overview
 

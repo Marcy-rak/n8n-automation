@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gift Advisor - AI-Powered Gift Recommendations</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .settings-toggle {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 20px auto;
+            display: block;
+            font-size: 0.9rem;
+        }
+
+        .settings-toggle:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .settings-panel {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+        }
+
+        .settings-panel.active {
+            display: block;
+        }
+
+        .settings-panel label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .settings-panel input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        .settings-panel small {
+            color: #666;
+            font-size: 0.85rem;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        @media (max-width: 968px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .form-card, .results-card {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .form-card h2, .results-card h2 {
+            margin-bottom: 20px;
+            color: #667eea;
+            font-size: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+            font-family: inherit;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee;
+            border: 2px solid #fcc;
+            color: #c33;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+
+        .empty-state svg {
+            width: 100px;
+            height: 100px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        .gift-card {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 2px solid #e0e0e0;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .gift-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            border-color: #667eea;
+        }
+
+        .gift-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 15px;
+        }
+
+        .gift-number {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .gift-title {
+            flex: 1;
+            padding: 0 15px;
+        }
+
+        .gift-title h3 {
+            color: #333;
+            margin-bottom: 5px;
+            font-size: 1.2rem;
+        }
+
+        .gift-category {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 15px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .gift-price {
+            color: #667eea;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .gift-description {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        .products-section {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .products-section h4 {
+            font-size: 0.9rem;
+            color: #555;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .product-item {
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            border: 1px solid #e0e0e0;
+        }
+
+        .product-thumbnail {
+            width: 60px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 5px;
+            background: #f0f0f0;
+        }
+
+        .product-info {
+            flex: 1;
+        }
+
+        .product-name {
+            font-weight: 600;
+            color: #333;
+            font-size: 0.9rem;
+            margin-bottom: 4px;
+        }
+
+        .product-meta {
+            font-size: 0.8rem;
+            color: #666;
+        }
+
+        .product-price {
+            color: #667eea;
+            font-weight: bold;
+            font-size: 1rem;
+        }
+
+        .product-link {
+            background: #667eea;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 5px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+
+        .product-link:hover {
+            background: #764ba2;
+        }
+
+        .best-deal-badge {
+            background: #4caf50;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 0.7rem;
+            margin-left: 8px;
+            font-weight: 600;
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .results-count {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        footer {
+            text-align: center;
+            color: white;
+            margin-top: 40px;
+            opacity: 0.8;
+        }
+
+        .quick-examples {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+
+        .quick-examples h3 {
+            font-size: 1rem;
+            margin-bottom: 10px;
+            color: #555;
+        }
+
+        .example-btn {
+            background: #f0f0f0;
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            border-radius: 5px;
+            margin: 5px 5px 5px 0;
+            font-size: 0.85rem;
+            cursor: pointer;
+            display: inline-block;
+            transition: background 0.2s;
+        }
+
+        .example-btn:hover {
+            background: #e0e0e0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎁 Gift Advisor</h1>
+            <p>AI-powered personalized gift recommendations with best deals</p>
+            <button class="settings-toggle" onclick="toggleSettings()">⚙️ Configure Webhook URL</button>
+        </header>
+
+        <div class="settings-panel" id="settingsPanel">
+            <label for="webhookUrl">n8n Webhook URL</label>
+            <input
+                type="text"
+                id="webhookUrl"
+                placeholder="https://your-n8n-instance.com/webhook/gift-advisor"
+                value=""
+            >
+            <small>Enter your n8n webhook URL. It will be saved in your browser's local storage.</small>
+        </div>
+
+        <div class="main-content">
+            <div class="form-card">
+                <h2>Tell us about the gift recipient</h2>
+                <form id="giftForm">
+                    <div class="form-group">
+                        <label for="age">Age</label>
+                        <input
+                            type="text"
+                            id="age"
+                            placeholder="e.g., 30 or 25-35"
+                            required
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="gender">Gender</label>
+                        <select id="gender" required>
+                            <option value="">Select gender</option>
+                            <option value="male">Male</option>
+                            <option value="female">Female</option>
+                            <option value="non-binary">Non-binary</option>
+                            <option value="prefer-not-to-say">Prefer not to say</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="interests">Interests & Hobbies</label>
+                        <textarea
+                            id="interests"
+                            placeholder="e.g., yoga, reading, coffee, photography"
+                            required
+                        ></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="budget">Budget</label>
+                        <select id="budget" required>
+                            <option value="">Select budget range</option>
+                            <option value="under $25">Under $25</option>
+                            <option value="$25-50">$25 - $50</option>
+                            <option value="$50-100">$50 - $100</option>
+                            <option value="$100-200">$100 - $200</option>
+                            <option value="$200-500">$200 - $500</option>
+                            <option value="over $500">Over $500</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="occasion">Occasion</label>
+                        <select id="occasion" required>
+                            <option value="">Select occasion</option>
+                            <option value="birthday">Birthday</option>
+                            <option value="anniversary">Anniversary</option>
+                            <option value="Christmas">Christmas</option>
+                            <option value="graduation">Graduation</option>
+                            <option value="wedding">Wedding</option>
+                            <option value="baby shower">Baby Shower</option>
+                            <option value="thank you">Thank You</option>
+                            <option value="just because">Just Because</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="relationship">Relationship</label>
+                        <select id="relationship" required>
+                            <option value="">Select relationship</option>
+                            <option value="spouse">Spouse/Partner</option>
+                            <option value="parent">Parent</option>
+                            <option value="sibling">Sibling</option>
+                            <option value="friend">Friend</option>
+                            <option value="colleague">Colleague</option>
+                            <option value="child">Child</option>
+                            <option value="grandparent">Grandparent</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+
+                    <button type="submit" class="btn" id="submitBtn">
+                        Find Perfect Gifts 🎁
+                    </button>
+                </form>
+
+                <div class="quick-examples">
+                    <h3>Quick Examples</h3>
+                    <button class="example-btn" onclick="fillExample('friend')">Friend's Birthday</button>
+                    <button class="example-btn" onclick="fillExample('spouse')">Anniversary</button>
+                    <button class="example-btn" onclick="fillExample('parent')">Parent's Gift</button>
+                </div>
+            </div>
+
+            <div class="results-card">
+                <h2>Gift Suggestions</h2>
+                <div id="resultsContainer">
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+                        </svg>
+                        <p>Fill out the form to get personalized gift recommendations</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>Powered by n8n, OpenAI, and SerpAPI | Gift Advisor v1.0</p>
+        </footer>
+    </div>
+
+    <script>
+        // Load saved webhook URL
+        const savedWebhookUrl = localStorage.getItem('webhookUrl');
+        if (savedWebhookUrl) {
+            document.getElementById('webhookUrl').value = savedWebhookUrl;
+        }
+
+        // Save webhook URL on change
+        document.getElementById('webhookUrl').addEventListener('input', function(e) {
+            localStorage.setItem('webhookUrl', e.target.value);
+        });
+
+        function toggleSettings() {
+            const panel = document.getElementById('settingsPanel');
+            panel.classList.toggle('active');
+        }
+
+        // Example data
+        const examples = {
+            friend: {
+                age: '30',
+                gender: 'female',
+                interests: 'yoga, reading, coffee, wellness',
+                budget: '$50-100',
+                occasion: 'birthday',
+                relationship: 'friend'
+            },
+            spouse: {
+                age: '35',
+                gender: 'male',
+                interests: 'gaming, technology, photography, cooking',
+                budget: '$100-200',
+                occasion: 'anniversary',
+                relationship: 'spouse'
+            },
+            parent: {
+                age: '60',
+                gender: 'female',
+                interests: 'gardening, cooking, travel, wine',
+                budget: '$50-100',
+                occasion: 'Christmas',
+                relationship: 'parent'
+            }
+        };
+
+        function fillExample(type) {
+            const example = examples[type];
+            document.getElementById('age').value = example.age;
+            document.getElementById('gender').value = example.gender;
+            document.getElementById('interests').value = example.interests;
+            document.getElementById('budget').value = example.budget;
+            document.getElementById('occasion').value = example.occasion;
+            document.getElementById('relationship').value = example.relationship;
+        }
+
+        document.getElementById('giftForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const webhookUrl = document.getElementById('webhookUrl').value.trim();
+
+            if (!webhookUrl) {
+                alert('Please configure your webhook URL first by clicking the "Configure Webhook URL" button.');
+                toggleSettings();
+                return;
+            }
+
+            const formData = {
+                age: document.getElementById('age').value,
+                gender: document.getElementById('gender').value,
+                interests: document.getElementById('interests').value,
+                budget: document.getElementById('budget').value,
+                occasion: document.getElementById('occasion').value,
+                relationship: document.getElementById('relationship').value
+            };
+
+            const resultsContainer = document.getElementById('resultsContainer');
+            const submitBtn = document.getElementById('submitBtn');
+
+            // Show loading state
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Finding Perfect Gifts...';
+            resultsContainer.innerHTML = `
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Our AI is finding the perfect gifts for you...</p>
+                </div>
+            `;
+
+            try {
+                const response = await fetch(webhookUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.success && data.suggestions) {
+                    displayResults(data);
+                } else {
+                    throw new Error(data.error || 'Failed to get recommendations');
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                resultsContainer.innerHTML = `
+                    <div class="error">
+                        <strong>Oops! Something went wrong.</strong><br>
+                        ${error.message}<br><br>
+                        Please check:
+                        <ul style="margin-top: 10px; margin-left: 20px;">
+                            <li>Your webhook URL is correct</li>
+                            <li>The n8n workflow is activated</li>
+                            <li>Your API credentials are configured</li>
+                        </ul>
+                    </div>
+                `;
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Find Perfect Gifts 🎁';
+            }
+        });
+
+        function displayResults(data) {
+            const resultsContainer = document.getElementById('resultsContainer');
+
+            const headerHTML = `
+                <div class="results-header">
+                    <div>
+                        <h3 style="margin-bottom: 5px;">Top ${data.totalSuggestions} Recommendations</h3>
+                        <p class="results-count">Based on your preferences</p>
+                    </div>
+                </div>
+            `;
+
+            const suggestionsHTML = data.suggestions.map(gift => {
+                let productsHTML = '';
+
+                if (gift.products && gift.products.length > 0) {
+                    productsHTML = `
+                        <div class="products-section">
+                            <h4>Available Products:</h4>
+                            ${gift.products.map((product, idx) => `
+                                <div class="product-item">
+                                    ${product.thumbnail ?
+                                        `<img src="${product.thumbnail}" alt="${product.productName}" class="product-thumbnail">` :
+                                        `<div class="product-thumbnail" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"></div>`
+                                    }
+                                    <div class="product-info">
+                                        <div class="product-name">
+                                            ${product.productName}
+                                            ${idx === 0 && gift.bestDeal ? '<span class="best-deal-badge">Best Deal</span>' : ''}
+                                        </div>
+                                        <div class="product-meta">
+                                            ${product.source} ${product.rating !== 'N/A' ? `• ⭐ ${product.rating}` : ''}
+                                        </div>
+                                    </div>
+                                    <div class="product-price">${product.price}</div>
+                                    <a href="${product.link}" target="_blank" class="product-link">View Deal</a>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                }
+
+                return `
+                    <div class="gift-card">
+                        <div class="gift-header">
+                            <div class="gift-number">${gift.giftIndex}</div>
+                            <div class="gift-title">
+                                <h3>${gift.giftName}</h3>
+                                <span class="gift-category">${gift.category}</span>
+                            </div>
+                            <div class="gift-price">${gift.estimatedPrice}</div>
+                        </div>
+                        <p class="gift-description">${gift.description}</p>
+                        ${productsHTML}
+                    </div>
+                `;
+            }).join('');
+
+            resultsContainer.innerHTML = headerHTML + suggestionsHTML;
+        }
+    </script>
+</body>
+</html>

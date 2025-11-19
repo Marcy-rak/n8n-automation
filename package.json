@@ -1,0 +1,25 @@
+{
+  "name": "gift-advisor-frontend",
+  "version": "1.0.0",
+  "description": "HTML frontend for the Gift Advisor n8n workflow",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx http-server -p 8000 -o",
+    "serve": "npx http-server -p 8000",
+    "dev": "npx http-server -p 8000 -o -c-1"
+  },
+  "keywords": [
+    "gift",
+    "advisor",
+    "n8n",
+    "workflow",
+    "frontend"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Marcy-rak/n8n-automation"
+  }
+}
