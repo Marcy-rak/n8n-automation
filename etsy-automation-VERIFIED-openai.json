@@ -1,0 +1,239 @@
+{
+  "name": "Etsy AI Automation - VERIFIED with OpenAI SEO",
+  "flow": [
+    {
+      "id": 1,
+      "module": "google-drive:watchFiles",
+      "version": 3,
+      "parameters": {
+        "watch": "myDrive",
+        "limit": 10
+      },
+      "mapper": {
+        "folderId": "YOUR_GOOGLE_DRIVE_FOLDER_ID_HERE"
+      },
+      "metadata": {
+        "designer": {
+          "x": 0,
+          "y": 0
+        },
+        "restore": {},
+        "expect": [
+          {
+            "name": "folderId",
+            "type": "folder",
+            "label": "Drive Folder",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "module": "google-drive:downloadAFile",
+      "version": 3,
+      "parameters": {},
+      "mapper": {
+        "fileId": "{{1.id}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 300,
+          "y": 0
+        },
+        "restore": {}
+      }
+    },
+    {
+      "id": 3,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": {
+        "handleErrors": false,
+        "useQuerystring": false,
+        "parseResponse": true
+      },
+      "mapper": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "method": "POST",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Bearer YOUR_OPENAI_API_KEY_HERE"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": "{\n  \"model\": \"gpt-4o\",\n  \"max_tokens\": 2000,\n  \"temperature\": 0.7,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an expert Etsy SEO specialist and professional product listing writer. You understand Etsy's search algorithm, keyword density, and buyer psychology. Generate JSON responses only - no markdown, no code blocks, just raw JSON.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"image_url\",\n          \"image_url\": {\n            \"url\": \"data:{{2.mimeType}};base64,{{base64(2.data)}}\"\n          }\n        },\n        {\n          \"type\": \"text\",\n          \"text\": \"Analyze this product image and create a complete Etsy listing optimized for Etsy search ranking. Return ONLY a JSON object:\\n\\n{\\n  \\\"title\\\": \\\"[SEO-optimized title, 140 chars max, front-load primary keywords]\\\",\\n  \\\"description\\\": \\\"[Compelling description, 1000 chars max, includes: benefits, features, materials, dimensions, care instructions, use cases]\\\",\\n  \\\"tags\\\": [\\\"tag1\\\", \\\"tag2\\\", \\\"tag3\\\", \\\"tag4\\\", \\\"tag5\\\", \\\"tag6\\\", \\\"tag7\\\", \\\"tag8\\\", \\\"tag9\\\", \\\"tag10\\\", \\\"tag11\\\", \\\"tag12\\\", \\\"tag13\\\"],\\n  \\\"materials\\\": [\\\"material1\\\", \\\"material2\\\", \\\"material3\\\"],\\n  \\\"category\\\": \\\"jewelry|clothing|art|home_decor|accessories\\\",\\n  \\\"price\\\": 29.99\\n}\\n\\nETSY SEO RULES:\\n1. TITLE: Start with most searched keywords, include primary material, style, use case, recipient (e.g., \\\"Sterling Silver Necklace Handmade Boho Jewelry Gift for Women\\\")\\n2. DESCRIPTION: First 2 sentences are crucial (show in search). Include ALL these sections:\\n   - Hook: Emotional benefit\\n   - Features: Materials, size, colors\\n   - Benefits: Why they need it\\n   - Use cases: How to use/wear\\n   - Care: How to maintain\\n3. TAGS: Mix of broad + specific (\\\"jewelry\\\" + \\\"boho necklace\\\"), long-tail keywords (3-4 words), buyer intent (\\\"gift for mom\\\"), material-based, occasion-based\\n4. MATERIALS: Maximum 13, be specific (\\\"sterling silver\\\" not just \\\"metal\\\")\\n5. PRICE: Research competitor pricing, factor in Etsy fees (13-15%)\\n\\nReturn ONLY the JSON object with NO markdown formatting.\"\n        }\n      ]\n    }\n  ]\n}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 600,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "OpenAI GPT-4 Vision analyzes image and generates SEO-optimized Etsy listing data"
+      }
+    },
+    {
+      "id": 4,
+      "module": "util:SetVariable",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "name": "listing_data",
+        "value": "{{parseJSON(3.data.choices[].message.content)}}",
+        "scope": "roundtrip"
+      },
+      "metadata": {
+        "designer": {
+          "x": 900,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Parse AI response into usable variable"
+      }
+    },
+    {
+      "id": 5,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": {
+        "handleErrors": false,
+        "useQuerystring": false,
+        "parseResponse": true
+      },
+      "mapper": {
+        "url": "https://openapi.etsy.com/v3/application/shops/YOUR_ETSY_SHOP_ID_HERE/listings",
+        "method": "POST",
+        "headers": [
+          {
+            "name": "x-api-key",
+            "value": "YOUR_ETSY_API_KEY_HERE"
+          },
+          {
+            "name": "Authorization",
+            "value": "Bearer YOUR_ETSY_OAUTH_TOKEN_HERE"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": "{\n  \"quantity\": 999,\n  \"title\": \"{{4.listing_data.title}}\",\n  \"description\": \"{{4.listing_data.description}}\",\n  \"price\": {{4.listing_data.price}},\n  \"who_made\": \"i_did\",\n  \"when_made\": \"made_to_order\",\n  \"taxonomy_id\": 1,\n  \"tags\": {{4.listing_data.tags}},\n  \"materials\": {{4.listing_data.materials}},\n  \"shipping_profile_id\": YOUR_SHIPPING_PROFILE_ID_HERE,\n  \"is_supply\": false,\n  \"is_customizable\": true,\n  \"should_auto_renew\": true,\n  \"state\": \"draft\",\n  \"type\": \"physical\"\n}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1200,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Create draft Etsy listing via Etsy API v3"
+      }
+    },
+    {
+      "id": 6,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": {
+        "handleErrors": false,
+        "useQuerystring": false,
+        "parseResponse": true
+      },
+      "mapper": {
+        "url": "https://openapi.etsy.com/v3/application/shops/YOUR_ETSY_SHOP_ID_HERE/listings/{{5.data.listing_id}}/images",
+        "method": "POST",
+        "headers": [
+          {
+            "name": "x-api-key",
+            "value": "YOUR_ETSY_API_KEY_HERE"
+          },
+          {
+            "name": "Authorization",
+            "value": "Bearer YOUR_ETSY_OAUTH_TOKEN_HERE"
+          }
+        ],
+        "data": [
+          {
+            "name": "image",
+            "value": "{{2.data}}"
+          },
+          {
+            "name": "alt_text",
+            "value": "{{4.listing_data.title}}"
+          },
+          {
+            "name": "rank",
+            "value": "1"
+          }
+        ]
+      },
+      "metadata": {
+        "designer": {
+          "x": 1500,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Upload main product image to listing"
+      }
+    },
+    {
+      "id": 7,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": {
+        "handleErrors": false,
+        "useQuerystring": false,
+        "parseResponse": true
+      },
+      "mapper": {
+        "url": "https://openapi.etsy.com/v3/application/listings/{{5.data.listing_id}}",
+        "method": "PUT",
+        "headers": [
+          {
+            "name": "x-api-key",
+            "value": "YOUR_ETSY_API_KEY_HERE"
+          },
+          {
+            "name": "Authorization",
+            "value": "Bearer YOUR_ETSY_OAUTH_TOKEN_HERE"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": "{\n  \"state\": \"active\"\n}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1800,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Publish listing (change from draft to active)"
+      }
+    }
+  ],
+  "metadata": {
+    "instant": false,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false
+    },
+    "designer": {
+      "orphans": []
+    },
+    "zone": "us1.make.com"
+  },
+  "notes": "VERIFIED Make.com Blueprint - Uses OpenAI GPT-4o for Etsy SEO optimization. Replace all placeholders before importing."
+}
