@@ -1,0 +1,500 @@
+{
+  "name": "Subscription Optimizer – Cost Saver AI",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "subscription-optimizer",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "subscription-optimizer"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "user_id",
+              "name": "user_id",
+              "value": "={{ $json.body.user_id || 'anonymous' }}",
+              "type": "string"
+            },
+            {
+              "id": "scan_gmail",
+              "name": "scan_gmail",
+              "value": "={{ $json.body.scan_gmail || false }}",
+              "type": "boolean"
+            },
+            {
+              "id": "manual_subscriptions",
+              "name": "manual_subscriptions",
+              "value": "={{ $json.body.manual_subscriptions || [] }}",
+              "type": "array"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-defaults",
+      "name": "Set Defaults",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.scan_gmail }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-gmail-scan",
+      "name": "IF Gmail Scan?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "filters": {
+          "query": "subject:(subscription OR renewal OR invoice OR receipt OR membership OR \"your plan\") newer_than:6m"
+        },
+        "options": {
+          "maxResults": 50
+        }
+      },
+      "id": "gmail-scan",
+      "name": "Gmail - Scan Subscriptions",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [900, 180],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmail-oauth",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract subscription info from Gmail emails\nconst items = $input.all();\nconst subscriptions = [];\n\nfor (const item of items) {\n  const subject = item.json.subject || '';\n  const snippet = item.json.snippet || '';\n  const from = item.json.from || '';\n  const body = subject + ' ' + snippet;\n  \n  // Extract vendor name (from email sender)\n  const vendorMatch = from.match(/([^<@]+)/);\n  const vendor = vendorMatch ? vendorMatch[1].trim() : 'Unknown';\n  \n  // Extract amount (looking for $XX.XX or XX.XX)\n  const amountMatch = body.match(/\\$?(\\d+\\.\\d{2})/);\n  const cost = amountMatch ? parseFloat(amountMatch[1]) : 0;\n  \n  // Detect billing cycle\n  let billing_cycle = 'monthly';\n  if (body.toLowerCase().includes('annual') || body.toLowerCase().includes('yearly')) {\n    billing_cycle = 'annual';\n  }\n  \n  // Only add if we found a cost\n  if (cost > 0) {\n    subscriptions.push({\n      name: vendor,\n      cost: cost,\n      billing_cycle: billing_cycle,\n      category: 'unknown',\n      source: 'gmail'\n    });\n  }\n}\n\nreturn subscriptions.map(sub => ({ json: sub }));"
+      },
+      "id": "parse-gmail",
+      "name": "Parse Gmail Subscriptions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 180]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "sheetName": "Subscriptions",
+        "options": {
+          "range": "A:F"
+        }
+      },
+      "id": "read-sheets",
+      "name": "Google Sheets - Read Subscriptions",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [900, 420],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "sheets-oauth",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge all subscription sources and deduplicate\n\n// Get data from different sources\nconst manualSubs = $('Set Defaults').first().json.manual_subscriptions || [];\nconst gmailSubs = $('Parse Gmail Subscriptions').all().map(item => item.json) || [];\nconst sheetSubs = $input.all().map(item => {\n  return {\n    name: item.json.name,\n    cost: parseFloat(item.json.cost) || 0,\n    billing_cycle: item.json.billing_cycle || 'monthly',\n    category: item.json.category || 'unknown',\n    renewal_date: item.json.renewal_date,\n    source: 'google_sheets'\n  };\n}).filter(sub => sub.name && sub.cost > 0);\n\n// Get user_id\nconst userId = $('Set Defaults').first().json.user_id;\n\n// Filter sheet subscriptions by user_id\nconst userSheetSubs = $input.all()\n  .filter(item => item.json.user_id === userId)\n  .map(item => ({\n    name: item.json.name,\n    cost: parseFloat(item.json.cost) || 0,\n    billing_cycle: item.json.billing_cycle || 'monthly',\n    category: item.json.category || 'unknown',\n    renewal_date: item.json.renewal_date,\n    source: 'google_sheets'\n  }))\n  .filter(sub => sub.name && sub.cost > 0);\n\n// Combine all sources\nconst allSubs = [...manualSubs, ...gmailSubs, ...userSheetSubs];\n\n// Normalize and deduplicate\nconst normalized = new Map();\n\nfor (const sub of allSubs) {\n  // Normalize name (lowercase, remove special chars)\n  const normalizedName = sub.name.toLowerCase().replace(/[^a-z0-9]/g, '');\n  \n  // Convert all to monthly cost for comparison\n  let monthlyCost = sub.cost;\n  if (sub.billing_cycle === 'annual' || sub.billing_cycle === 'yearly') {\n    monthlyCost = sub.cost / 12;\n  }\n  \n  // Keep the most detailed entry (prefer manual > sheets > gmail)\n  if (!normalized.has(normalizedName) || \n      (sub.source === 'manual' || \n       (sub.source === 'google_sheets' && normalized.get(normalizedName).source === 'gmail'))) {\n    normalized.set(normalizedName, {\n      name: sub.name,\n      cost: sub.cost,\n      monthly_cost: parseFloat(monthlyCost.toFixed(2)),\n      billing_cycle: sub.billing_cycle || 'monthly',\n      category: sub.category || 'unknown',\n      renewal_date: sub.renewal_date,\n      source: sub.source || 'manual'\n    });\n  }\n}\n\n// Convert back to array\nconst uniqueSubs = Array.from(normalized.values());\n\n// Add metadata\nreturn uniqueSubs.map(sub => ({\n  json: {\n    ...sub,\n    user_id: userId,\n    timestamp: $('Set Defaults').first().json.timestamp\n  }\n}));"
+      },
+      "id": "merge-dedupe",
+      "name": "Merge & Deduplicate Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "Split Into Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LLM_API_URL || 'https://api.openai.com/v1/chat/completions' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.LLM_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4-turbo-preview\",\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a subscription cost optimization expert. Analyze subscriptions and find cheaper alternatives. Always respond with valid JSON only.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Analyze this subscription and find cheaper alternatives:\\n\\nSubscription: {{ $json.name }}\\nCurrent Cost: ${{ $json.cost }}/{{ $json.billing_cycle }}\\nCategory: {{ $json.category }}\\n\\nProvide:\\n1. 3-5 cheaper alternatives (include free options)\\n2. Feature comparison\\n3. Savings calculation\\n4. Feature match percentage (0-100%)\\n\\nReturn JSON in this exact format:\\n{\\n  \\\"subscription\\\": \\\"{{ $json.name }}\\\",\\n  \\\"current_cost\\\": {{ $json.monthly_cost }},\\n  \\\"alternatives\\\": [\\n    {\\n      \\\"name\\\": \\\"alternative name\\\",\\n      \\\"cost\\\": 0,\\n      \\\"billing_cycle\\\": \\\"monthly\\\",\\n      \\\"savings_month\\\": 0,\\n      \\\"savings_year\\\": 0,\\n      \\\"feature_match_percent\\\": 0,\\n      \\\"key_features\\\": [\\\"feature1\\\", \\\"feature2\\\"],\\n      \\\"limitations\\\": [\\\"limitation1\\\"]\\n    }\\n  ],\\n  \\\"recommendation\\\": \\\"brief recommendation\\\"\\n}\"\n    }\n  ],\n  \"temperature\": 0.7,\n  \"max_tokens\": 1500\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "llm-request",
+      "name": "LLM - Find Alternatives",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse LLM response and calculate savings\nconst item = $input.first();\n\ntry {\n  // Get LLM response\n  const llmResponse = item.json.choices?.[0]?.message?.content;\n  \n  if (!llmResponse) {\n    throw new Error('No LLM response received');\n  }\n  \n  // Parse JSON response\n  const analysis = JSON.parse(llmResponse);\n  \n  // Get original subscription data\n  const originalSub = $('Split Into Batches').first().json;\n  \n  // Find best alternative (highest savings with good feature match)\n  let bestAlternative = null;\n  let maxSavings = 0;\n  \n  if (analysis.alternatives && analysis.alternatives.length > 0) {\n    for (const alt of analysis.alternatives) {\n      // Prefer alternatives with >70% feature match and positive savings\n      if (alt.feature_match_percent >= 70 && alt.savings_month > maxSavings) {\n        maxSavings = alt.savings_month;\n        bestAlternative = alt;\n      }\n    }\n    \n    // If no good match found, take the one with highest savings\n    if (!bestAlternative) {\n      bestAlternative = analysis.alternatives.reduce((best, alt) => \n        alt.savings_month > best.savings_month ? alt : best\n      );\n    }\n  }\n  \n  // Calculate if switch is worth it\n  const worthSwitching = bestAlternative && \n    (bestAlternative.savings_month >= 10 || bestAlternative.feature_match_percent >= 80);\n  \n  return {\n    json: {\n      user_id: originalSub.user_id,\n      timestamp: originalSub.timestamp,\n      subscription: originalSub.name,\n      current_cost: originalSub.monthly_cost,\n      billing_cycle: originalSub.billing_cycle,\n      category: originalSub.category,\n      best_alternative: bestAlternative?.name || 'No alternative found',\n      alternative_cost: bestAlternative?.cost || originalSub.monthly_cost,\n      savings_month: bestAlternative?.savings_month || 0,\n      savings_year: bestAlternative?.savings_year || 0,\n      feature_match_percent: bestAlternative?.feature_match_percent || 0,\n      worth_switching: worthSwitching,\n      recommendation: analysis.recommendation || 'No recommendation available',\n      all_alternatives: analysis.alternatives || [],\n      analysis_status: 'success'\n    }\n  };\n  \n} catch (error) {\n  // Handle errors gracefully\n  const originalSub = $('Split Into Batches').first().json;\n  \n  return {\n    json: {\n      user_id: originalSub.user_id,\n      timestamp: originalSub.timestamp,\n      subscription: originalSub.name,\n      current_cost: originalSub.monthly_cost,\n      billing_cycle: originalSub.billing_cycle,\n      category: originalSub.category,\n      best_alternative: 'Analysis failed',\n      alternative_cost: originalSub.monthly_cost,\n      savings_month: 0,\n      savings_year: 0,\n      feature_match_percent: 0,\n      worth_switching: false,\n      recommendation: 'LLM analysis failed: ' + error.message,\n      all_alternatives: [],\n      analysis_status: 'error',\n      error: error.message\n    }\n  };\n}"
+      },
+      "id": "parse-llm",
+      "name": "Parse LLM Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {},
+      "id": "loop-back",
+      "name": "Loop Back",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all results and calculate totals\nconst allResults = $input.all();\n\nif (allResults.length === 0) {\n  return {\n    json: {\n      status: 'error',\n      message: 'No subscriptions to analyze',\n      total_subscriptions: 0,\n      total_monthly_cost: 0,\n      total_monthly_savings: 0,\n      total_yearly_savings: 0,\n      subscriptions: []\n    }\n  };\n}\n\n// Calculate totals\nconst totalMonthlyCost = allResults.reduce((sum, item) => sum + (item.json.current_cost || 0), 0);\nconst totalMonthlySavings = allResults.reduce((sum, item) => sum + (item.json.savings_month || 0), 0);\nconst totalYearlySavings = allResults.reduce((sum, item) => sum + (item.json.savings_year || 0), 0);\n\n// Calculate savings percentage\nconst savingsPercentage = totalMonthlyCost > 0 \n  ? ((totalMonthlySavings / totalMonthlyCost) * 100).toFixed(1)\n  : 0;\n\n// Format subscriptions for response\nconst subscriptions = allResults.map(item => ({\n  name: item.json.subscription,\n  current_cost: parseFloat(item.json.current_cost.toFixed(2)),\n  billing_cycle: item.json.billing_cycle,\n  category: item.json.category,\n  best_alternative: item.json.best_alternative,\n  alternative_cost: parseFloat((item.json.alternative_cost || 0).toFixed(2)),\n  savings_month: parseFloat((item.json.savings_month || 0).toFixed(2)),\n  savings_year: parseFloat((item.json.savings_year || 0).toFixed(2)),\n  feature_match_percent: item.json.feature_match_percent,\n  worth_switching: item.json.worth_switching,\n  recommendation: item.json.recommendation\n}));\n\n// Sort by savings (highest first)\nsubscriptions.sort((a, b) => b.savings_month - a.savings_month);\n\n// Get user_id from first result\nconst userId = allResults[0].json.user_id;\nconst timestamp = allResults[0].json.timestamp;\n\nreturn {\n  json: {\n    status: 'success',\n    user_id: userId,\n    timestamp: timestamp,\n    total_subscriptions: allResults.length,\n    total_monthly_cost: parseFloat(totalMonthlyCost.toFixed(2)),\n    total_monthly_savings: parseFloat(totalMonthlySavings.toFixed(2)),\n    total_yearly_savings: parseFloat(totalYearlySavings.toFixed(2)),\n    savings_percentage: parseFloat(savingsPercentage),\n    subscriptions: subscriptions,\n    detailed_results: allResults.map(item => item.json)\n  }\n};"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{ $env.GOOGLE_SHEETS_ID }}",
+        "sheetName": "SubscriptionAlternatives",
+        "dataMode": "autoMapInputData",
+        "options": {
+          "useAppend": true
+        }
+      },
+      "id": "write-results",
+      "name": "Google Sheets - Write Results",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [2660, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "sheets-oauth",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format final response\nconst data = $input.first().json;\n\n// Create human-friendly summary\nconst summary = `\n🎯 Subscription Optimization Report\n\n📊 Analysis Summary:\n- Total Subscriptions Analyzed: ${data.total_subscriptions}\n- Current Monthly Cost: $${data.total_monthly_cost}\n- Potential Monthly Savings: $${data.total_monthly_savings}\n- Potential Yearly Savings: $${data.total_yearly_savings}\n- Savings Percentage: ${data.savings_percentage}%\n\n💡 Top Savings Opportunities:\n${data.subscriptions.slice(0, 3).map((sub, i) => \n  `${i + 1}. ${sub.name} → ${sub.best_alternative}\\n   Save: $${sub.savings_month}/month ($${sub.savings_year}/year)\\n   Feature Match: ${sub.feature_match_percent}%`\n).join('\\n\\n')}\n\n✅ Recommendations:\n${data.subscriptions.filter(s => s.worth_switching).length} subscriptions worth switching\n${data.subscriptions.filter(s => !s.worth_switching).length} subscriptions to keep\n`;\n\nreturn {\n  json: {\n    ...data,\n    summary: summary.trim()\n  }\n};"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2880, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json, null, 2) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [3100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle errors - return to webhook\nreturn {\n  json: {\n    status: 'error',\n    error: $input.first().json.error?.message || 'An error occurred',\n    message: 'Workflow encountered an error. Check logs for details.',\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "error-handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 480]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json, null, 2) }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 480]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Defaults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Defaults": {
+      "main": [
+        [
+          {
+            "node": "IF Gmail Scan?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Gmail Scan?": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Scan Subscriptions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Sheets - Read Subscriptions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Scan Subscriptions": {
+      "main": [
+        [
+          {
+            "node": "Parse Gmail Subscriptions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gmail Subscriptions": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets - Read Subscriptions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets - Read Subscriptions": {
+      "main": [
+        [
+          {
+            "node": "Merge & Deduplicate Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge & Deduplicate Sources": {
+      "main": [
+        [
+          {
+            "node": "Split Into Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Batches": {
+      "main": [
+        [
+          {
+            "node": "LLM - Find Alternatives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Find Alternatives": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Response": {
+      "main": [
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back": {
+      "main": [
+        [
+          {
+            "node": "Split Into Batches",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets - Write Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets - Write Results": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "AI",
+      "id": "ai-tag"
+    },
+    {
+      "name": "Cost Optimization",
+      "id": "cost-tag"
+    },
+    {
+      "name": "Subscriptions",
+      "id": "sub-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-19T10:00:00.000Z",
+  "versionId": "1"
+}
