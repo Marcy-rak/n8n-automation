@@ -2,6 +2,24 @@
 
 A production-ready automated trading analysis system powered by Grok AI, PostgreSQL with pgvector for RAG-based context retrieval, and confidence-based filtering.
 
+## 🚀 Two Implementation Options
+
+This project provides **TWO complete implementations**:
+
+### 1️⃣ n8n Visual Workflows (Recommended for Quick Start)
+- **No coding required** - Visual workflow builder
+- **Import and run** - Ready-to-use JSON workflows
+- **15-minute setup** - Get started immediately
+- **Two versions**: Full (with embeddings) & Simple (easy setup)
+- **See:** `N8N-QUICKSTART.md` for 15-minute setup
+
+### 2️⃣ TypeScript/Node.js Backend (Advanced/Custom)
+- **Full control** - Customizable codebase
+- **Standalone service** - Run independently or integrate
+- **Production-ready** - Complete with logging, error handling
+- **Docker support** - Easy deployment
+- **See:** Installation section below
+
 ## Features
 
 - **Scheduled Analysis**: Runs every 30 minutes to analyze market conditions
@@ -63,9 +81,24 @@ A production-ready automated trading analysis system powered by Grok AI, Postgre
 5. **Email SMTP** credentials (Gmail, SendGrid, etc.)
 6. **Twilio Account** (optional, for WhatsApp)
 
-## Quick Start
+## Quick Start Options
 
-### 1. Install Dependencies
+### Option A: n8n Workflow (Fastest - 15 minutes)
+
+Perfect for non-developers or quick deployment:
+
+1. **Import workflow**: `n8n-workflow-simple.json` into n8n
+2. **Setup database**: Run `schema.sql` in PostgreSQL
+3. **Configure credentials**: Grok API, PostgreSQL, Email
+4. **Activate workflow**: Runs every 30 minutes automatically
+
+📖 **Complete guide:** See `N8N-QUICKSTART.md`
+
+### Option B: TypeScript Backend (Advanced)
+
+For developers who want full control:
+
+#### 1. Install Dependencies
 
 ```bash
 npm install
@@ -278,16 +311,35 @@ Configure log level in `.env`:
 LOG_LEVEL=info  # debug, info, warn, error
 ```
 
+## n8n Workflows Included
+
+Pre-built n8n workflows ready to import:
+
+### `n8n-workflow.json` - Full Version
+- **20 nodes** - Complete production workflow
+- **pgvector RAG** - Semantic similarity search
+- **OpenAI embeddings** - For advanced context retrieval
+- **Email + WhatsApp** - Multi-channel notifications
+- **Detailed logging** - Full audit trail
+
+### `n8n-workflow-simple.json` - Simple Version
+- **12 nodes** - Streamlined for quick setup
+- **Recent trades** - Simple context (no embeddings)
+- **Email only** - SMTP notifications
+- **Easy setup** - Fewer dependencies
+- **Cost-effective** - Only Grok API required
+
+📊 **Comparison:** See `WORKFLOW-COMPARISON.md` for detailed comparison
+
 ## Integration with n8n / Make
 
-This system is designed as modular functions that can be easily integrated:
+### n8n (Visual Workflows)
 
-### n8n Integration
-
-1. **HTTP Request Node**: Call your deployed API (wrap functions in Express endpoints)
-2. **Schedule Trigger**: Set to 30-minute intervals
-3. **PostgreSQL Node**: Direct database queries
-4. **Function Node**: Import TypeScript modules
+**Ready-to-import workflows provided!**
+- Import `n8n-workflow.json` or `n8n-workflow-simple.json`
+- Configure credentials (PostgreSQL, Grok API, Email)
+- Activate and run every 30 minutes
+- See `N8N-SETUP.md` for complete instructions
 
 ### Make Integration
 
@@ -310,34 +362,42 @@ This system is designed as modular functions that can be easily integrated:
 
 ```
 .
-├── src/
-│   ├── config/              # Environment configuration
+├── n8n-workflow.json              # Full n8n workflow (20 nodes)
+├── n8n-workflow-simple.json       # Simple n8n workflow (12 nodes)
+├── N8N-QUICKSTART.md              # 15-minute n8n setup guide
+├── N8N-SETUP.md                   # Detailed n8n documentation
+├── WORKFLOW-COMPARISON.md         # Compare workflows
+│
+├── src/                           # TypeScript backend (optional)
+│   ├── config/                    # Environment configuration
 │   │   └── index.ts
-│   ├── database/            # Database layer
+│   ├── database/                  # Database layer
 │   │   ├── connection.ts
 │   │   ├── tradeRepository.ts
 │   │   └── analysisLogRepository.ts
-│   ├── models/              # TypeScript interfaces
+│   ├── models/                    # TypeScript interfaces
 │   │   └── TradeIdea.ts
-│   ├── services/            # Business logic
-│   │   ├── grokService.ts          # Grok API client
-│   │   ├── ragService.ts           # RAG context retrieval
-│   │   ├── embeddingService.ts     # OpenAI embeddings
-│   │   ├── notificationService.ts  # Email/WhatsApp
+│   ├── services/                  # Business logic
+│   │   ├── grokService.ts         # Grok API client
+│   │   ├── ragService.ts          # RAG context retrieval
+│   │   ├── embeddingService.ts    # OpenAI embeddings
+│   │   ├── notificationService.ts # Email/WhatsApp
 │   │   ├── tradeAnalysisService.ts # Main orchestrator
-│   │   └── scheduledAnalysis.ts    # Cron job logic
-│   ├── utils/               # Utilities
+│   │   └── scheduledAnalysis.ts   # Cron job logic
+│   ├── utils/                     # Utilities
 │   │   └── logger.ts
-│   ├── scripts/             # Standalone scripts
+│   ├── scripts/                   # Standalone scripts
 │   │   ├── initDatabase.ts
 │   │   └── checkOutcomes.ts
-│   ├── index.ts             # Manual run entry
-│   └── scheduler.ts         # Scheduler entry
-├── schema.sql               # PostgreSQL schema
+│   ├── index.ts                   # Manual run entry
+│   └── scheduler.ts               # Scheduler entry
+│
+├── schema.sql                     # PostgreSQL schema
 ├── package.json
 ├── tsconfig.json
 ├── .env.example
-└── README.md
+├── README.md                      # This file
+└── SETUP.md                       # Detailed TypeScript setup
 ```
 
 ## Security Best Practices
