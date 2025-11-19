@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # Backend API
+  backend:
+    build: ./backend
+    container_name: trading_dashboard_backend
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-trading_workflow}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - PORT=3001
+      - FRONTEND_URL=http://localhost:3000
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+  # Frontend
+  frontend:
+    build: ./frontend
+    container_name: trading_dashboard_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+  # PostgreSQL (if not already running)
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: trading_postgres
+    environment:
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+      - POSTGRES_DB=${DB_NAME:-trading_workflow}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - trading-network
+
+networks:
+  trading-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
