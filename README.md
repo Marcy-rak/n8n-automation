@@ -1,8 +1,35 @@
-# Automated Trading Workflow
+# n8n Automation Workflows
+
+A collection of production-ready automation workflows for various use cases, powered by AI and modern APIs.
+
+## Available Workflows
+
+### 1. YouTube Content Manager AI Agent Assistant
+
+An intelligent n8n workflow that automates YouTube content creation from ideation to optimization using Google Gemini AI (free tier) and OpenAI for advanced analysis.
+
+**Features:**
+- Content idea generation with viral potential scoring
+- AI-powered script writing with timestamps and B-roll suggestions
+- SEO-optimized metadata (titles, descriptions, tags)
+- Thumbnail concept generation
+- Google Drive, Notion, and Gmail integration
+- **100% free tier compatible** (using Gemini AI)
+
+**Quick Links:**
+- [Full Documentation](workflows/README-YOUTUBE-CONTENT-MANAGER.md)
+- [Quick Start Guide](workflows/QUICKSTART.md)
+- [Workflow File](workflows/youtube-content-manager.json)
+
+**Tech Stack:** n8n, Google Gemini AI (free), OpenAI (optional), Google Drive, Notion, Gmail
+
+---
+
+### 2. Automated Trading Workflow
 
 A production-ready automated trading analysis system powered by Grok AI, PostgreSQL with pgvector for RAG-based context retrieval, and confidence-based filtering.
 
-## Features
+**Features:**
 
 - **Scheduled Analysis**: Runs every 30 minutes to analyze market conditions
 - **AI-Powered Insights**: Uses Grok API for intelligent trade recommendations

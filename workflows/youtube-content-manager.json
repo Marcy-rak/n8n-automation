@@ -1,0 +1,616 @@
+{
+  "name": "YouTube Content Manager AI Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Welcome screen - Ask user what they want to do\nconst options = {\n  action: 'Please select an action',\n  choices: [\n    '1. Generate Content Ideas',\n    '2. Write Video Script',\n    '3. Optimize Video Metadata',\n    '4. Complete Content Pipeline (Ideas → Script → Metadata)',\n    '5. Generate Thumbnail Concepts'\n  ],\n  userInput: {\n    niche: 'Enter your channel niche/topic',\n    targetAudience: 'Enter target audience',\n    videoTopic: 'Enter video topic (if applicable)',\n    keywords: 'Enter keywords (comma-separated)'\n  }\n};\n\nreturn { json: options };"
+      },
+      "id": "user-input",
+      "name": "User Input Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "contains",
+              "value2": "Generate Content Ideas"
+            }
+          ]
+        }
+      },
+      "id": "route-content-ideas",
+      "name": "Route: Content Ideas",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "contains",
+              "value2": "Write Video Script"
+            }
+          ]
+        }
+      },
+      "id": "route-script-writing",
+      "name": "Route: Script Writing",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 350]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "contains",
+              "value2": "Optimize Video Metadata"
+            }
+          ]
+        }
+      },
+      "id": "route-metadata",
+      "name": "Route: Metadata Optimization",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "contains",
+              "value2": "Complete Content Pipeline"
+            }
+          ]
+        }
+      },
+      "id": "route-full-pipeline",
+      "name": "Route: Full Pipeline",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 650]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "file",
+        "operation": "upload",
+        "name": "={{$json.fileName}}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "YouTube Content",
+          "mode": "list"
+        },
+        "options": {
+          "mimeType": "application/vnd.google-apps.document"
+        }
+      },
+      "id": "google-drive-save",
+      "name": "Save to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1850, 400],
+      "credentials": {
+        "googleApi": {
+          "id": "1",
+          "name": "Google Service Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": {
+          "__rl": true,
+          "value": "YouTube Content Calendar",
+          "mode": "list"
+        },
+        "title": "={{$json.videoTitle}}",
+        "properties": {
+          "customProperty": [
+            {
+              "key": "Status",
+              "textValue": "Idea Generated"
+            },
+            {
+              "key": "Niche",
+              "textValue": "={{$json.niche}}"
+            },
+            {
+              "key": "Target Audience",
+              "textValue": "={{$json.targetAudience}}"
+            },
+            {
+              "key": "Created Date",
+              "dateValue": "={{$now}}"
+            },
+            {
+              "key": "Keywords",
+              "multiSelectValue": "={{$json.keywords}}"
+            },
+            {
+              "key": "Google Drive Link",
+              "urlValue": "={{$json.driveUrl}}"
+            }
+          ]
+        }
+      },
+      "id": "notion-save",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [2050, 400],
+      "credentials": {
+        "notionApi": {
+          "id": "2",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "sendTo": "={{$json.userEmail}}",
+        "subject": "YouTube Content Ready: {{$json.videoTitle}}",
+        "emailType": "html",
+        "message": "=<h2>Your YouTube Content is Ready!</h2>\n\n<p><strong>Title:</strong> {{$json.videoTitle}}</p>\n\n<p><strong>Action:</strong> {{$json.action}}</p>\n\n<h3>Quick Links:</h3>\n<ul>\n  <li><a href=\"{{$json.driveUrl}}\">Google Drive Document</a></li>\n  <li><a href=\"{{$json.notionUrl}}\">Notion Content Calendar</a></li>\n</ul>\n\n<h3>Summary:</h3>\n<p>{{$json.summary}}</p>\n\n<p>Generated by YouTube Content Manager AI Agent</p>",
+        "options": {}
+      },
+      "id": "gmail-notify",
+      "name": "Send Gmail Notification",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2250, 400],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "3",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gemini-2.0-flash-exp",
+        "options": {
+          "temperature": 0.8,
+          "maxOutputTokens": 2048
+        },
+        "text": "=You are a YouTube content strategist AI. Generate 10 creative and trending video ideas for the following:\n\nNiche/Topic: {{$json.niche}}\nTarget Audience: {{$json.targetAudience}}\nKeywords: {{$json.keywords}}\n\nFor each idea, provide:\n1. Video Title (catchy and SEO-optimized)\n2. Brief Description (2-3 sentences)\n3. Hook (first 10 seconds script)\n4. Target Audience Pain Point\n5. Trending Angle\n6. Estimated Video Length\n7. Content Difficulty (Beginner/Intermediate/Advanced)\n8. Viral Potential Score (1-10)\n\nFormat as JSON array with these fields.\nMake ideas unique, engaging, and based on current trends."
+      },
+      "id": "gemini-content-ideas",
+      "name": "Gemini: Generate Content Ideas",
+      "type": "n8n-nodes-base.googleGemini",
+      "typeVersion": 1,
+      "position": [850, 200],
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "4",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gemini-2.0-flash-exp",
+        "options": {
+          "temperature": 0.7,
+          "maxOutputTokens": 4096
+        },
+        "text": "=You are a professional YouTube scriptwriter. Write a complete, engaging video script for:\n\nVideo Title: {{$json.videoTitle}}\nTopic: {{$json.videoTopic}}\nTarget Audience: {{$json.targetAudience}}\nVideo Length: {{$json.videoLength || '10-15 minutes'}}\nTone: {{$json.tone || 'Educational and Engaging'}}\n\nScript Structure:\n1. HOOK (First 10 seconds - grab attention immediately)\n2. INTRODUCTION (30 seconds - introduce topic and what viewers will learn)\n3. MAIN CONTENT (Divided into 3-5 key sections with timestamps)\n   - Each section should have:\n     * Clear heading\n     * Talking points\n     * Visual suggestions\n     * B-roll ideas\n4. ENGAGEMENT PROMPTS (Like, Subscribe, Comment reminders - naturally integrated)\n5. CONCLUSION (Summary and call-to-action)\n6. OUTRO (End screen suggestions)\n\nInclude:\n- Timestamps for each section\n- Visual cues and B-roll suggestions\n- Text overlay suggestions\n- Music/sound effect cues\n- Editing notes\n\nMake it conversational, engaging, and optimized for retention."
+      },
+      "id": "gemini-script-writing",
+      "name": "Gemini: Write Video Script",
+      "type": "n8n-nodes-base.googleGemini",
+      "typeVersion": 1,
+      "position": [850, 350],
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "4",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gemini-2.0-flash-exp",
+        "options": {
+          "temperature": 0.6,
+          "maxOutputTokens": 2048
+        },
+        "text": "=You are a YouTube SEO expert. Optimize video metadata for maximum reach and engagement:\n\nVideo Title: {{$json.videoTitle}}\nVideo Topic: {{$json.videoTopic}}\nTarget Keywords: {{$json.keywords}}\nTarget Audience: {{$json.targetAudience}}\n\nGenerate:\n\n1. OPTIMIZED TITLE (3 variations)\n   - Include primary keyword\n   - 60 characters or less\n   - Clickable but not clickbait\n   - Include numbers/power words when relevant\n\n2. VIDEO DESCRIPTION (Full 5000 character optimization)\n   - First 150 characters (what shows before \"Show More\")\n   - Detailed description with timestamps\n   - Relevant keywords naturally integrated\n   - Links section (social media, resources)\n   - Hashtags (3-5 relevant)\n   - Call-to-action\n\n3. TAGS (30 tags)\n   - Mix of broad and specific\n   - Include misspellings of main keywords\n   - Related topics\n   - Competitor channels\n\n4. THUMBNAIL CONCEPTS (3 ideas)\n   - Text overlay suggestions\n   - Color scheme\n   - Key visual elements\n   - Emotion/expression to convey\n\n5. BEST POSTING TIME\n   - Based on niche and audience\n\n6. PLAYLIST SUGGESTIONS\n   - Which playlists to add this video to\n\nFormat as structured JSON."
+      },
+      "id": "gemini-metadata-optimization",
+      "name": "Gemini: Optimize Metadata",
+      "type": "n8n-nodes-base.googleGemini",
+      "typeVersion": 1,
+      "position": [850, 500],
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "4",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 2048
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert YouTube content strategist with deep knowledge of viral content, audience psychology, and platform algorithms. Provide advanced analysis and recommendations."
+            },
+            {
+              "role": "user",
+              "content": "=Analyze and enhance this YouTube content strategy:\n\n{{$json.geminiOutput}}\n\nProvide:\n1. Advanced SEO recommendations\n2. Viral potential analysis\n3. Competition analysis keywords\n4. Audience retention strategies\n5. Monetization opportunities\n6. Cross-promotion ideas\n7. Content series potential\n\nBe specific and actionable."
+            }
+          ]
+        }
+      },
+      "id": "openai-advanced-analysis",
+      "name": "OpenAI: Advanced Analysis",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1050, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "5",
+          "name": "OpenAI API"
+        }
+      },
+      "notes": "Used for more complex analysis when needed"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Process and structure Gemini output\nconst geminiResponse = $input.item.json.text || $input.item.json.response;\n\nlet structured = {};\n\ntry {\n  // Try to parse as JSON first\n  structured = JSON.parse(geminiResponse);\n} catch (e) {\n  // If not JSON, structure the text response\n  structured = {\n    rawContent: geminiResponse,\n    action: $input.item.json.action || 'Unknown',\n    timestamp: new Date().toISOString(),\n    processed: true\n  };\n}\n\n// Add metadata\nstructured.generatedAt = new Date().toISOString();\nstructured.aiModel = 'Gemini';\nstructured.niche = $input.item.json.niche;\nstructured.targetAudience = $input.item.json.targetAudience;\n\nreturn { json: structured };"
+      },
+      "id": "process-gemini-output",
+      "name": "Process AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 350]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Format content for Google Drive document\nconst data = $input.item.json;\n\nlet documentContent = '';\nlet fileName = '';\n\n// Determine document type and format accordingly\nif (data.action && data.action.includes('Content Ideas')) {\n  fileName = `Content Ideas - ${data.niche} - ${new Date().toISOString().split('T')[0]}.txt`;\n  \n  documentContent = `YOUTUBE CONTENT IDEAS\\n`;\n  documentContent += `Generated: ${data.generatedAt}\\n`;\n  documentContent += `Niche: ${data.niche}\\n`;\n  documentContent += `Target Audience: ${data.targetAudience}\\n`;\n  documentContent += `\\n${'='.repeat(80)}\\n\\n`;\n  \n  if (Array.isArray(data.ideas)) {\n    data.ideas.forEach((idea, index) => {\n      documentContent += `IDEA ${index + 1}: ${idea.title}\\n`;\n      documentContent += `Description: ${idea.description}\\n`;\n      documentContent += `Hook: ${idea.hook}\\n`;\n      documentContent += `Viral Potential: ${idea.viralPotential}/10\\n`;\n      documentContent += `\\n${'-'.repeat(80)}\\n\\n`;\n    });\n  } else {\n    documentContent += data.rawContent || JSON.stringify(data, null, 2);\n  }\n  \n} else if (data.action && data.action.includes('Script')) {\n  fileName = `Video Script - ${data.videoTitle || 'Untitled'} - ${new Date().toISOString().split('T')[0]}.txt`;\n  \n  documentContent = `VIDEO SCRIPT\\n`;\n  documentContent += `Title: ${data.videoTitle || 'Untitled'}\\n`;\n  documentContent += `Generated: ${data.generatedAt}\\n`;\n  documentContent += `\\n${'='.repeat(80)}\\n\\n`;\n  documentContent += data.script || data.rawContent || JSON.stringify(data, null, 2);\n  \n} else if (data.action && data.action.includes('Metadata')) {\n  fileName = `Metadata - ${data.videoTitle || 'Untitled'} - ${new Date().toISOString().split('T')[0]}.txt`;\n  \n  documentContent = `VIDEO METADATA OPTIMIZATION\\n`;\n  documentContent += `Title: ${data.videoTitle || 'Untitled'}\\n`;\n  documentContent += `Generated: ${data.generatedAt}\\n`;\n  documentContent += `\\n${'='.repeat(80)}\\n\\n`;\n  \n  if (data.optimizedTitles) {\n    documentContent += `OPTIMIZED TITLES:\\n`;\n    data.optimizedTitles.forEach((title, i) => {\n      documentContent += `${i + 1}. ${title}\\n`;\n    });\n    documentContent += `\\n`;\n  }\n  \n  if (data.description) {\n    documentContent += `DESCRIPTION:\\n${data.description}\\n\\n`;\n  }\n  \n  if (data.tags) {\n    documentContent += `TAGS:\\n${data.tags.join(', ')}\\n\\n`;\n  }\n  \n  if (data.thumbnailConcepts) {\n    documentContent += `THUMBNAIL CONCEPTS:\\n`;\n    data.thumbnailConcepts.forEach((concept, i) => {\n      documentContent += `${i + 1}. ${JSON.stringify(concept, null, 2)}\\n`;\n    });\n  }\n  \n  if (!data.optimizedTitles && !data.description && !data.tags) {\n    documentContent += data.rawContent || JSON.stringify(data, null, 2);\n  }\n  \n} else {\n  fileName = `YouTube Content - ${new Date().toISOString().split('T')[0]}.txt`;\n  documentContent = data.rawContent || JSON.stringify(data, null, 2);\n}\n\nreturn {\n  json: {\n    ...data,\n    fileName: fileName,\n    documentContent: documentContent,\n    contentType: 'text/plain'\n  }\n};"
+      },
+      "id": "format-for-drive",
+      "name": "Format for Google Drive",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 350]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Prepare data for Notion database\nconst data = $input.item.json;\n\nconst notionData = {\n  videoTitle: data.videoTitle || data.title || 'Untitled',\n  niche: data.niche || 'General',\n  targetAudience: data.targetAudience || 'General Audience',\n  keywords: data.keywords || [],\n  status: 'Draft',\n  createdDate: new Date().toISOString(),\n  driveUrl: data.driveUrl || '',\n  aiModel: data.aiModel || 'Gemini',\n  action: data.action || 'Content Created',\n  summary: generateSummary(data)\n};\n\nfunction generateSummary(data) {\n  if (data.action && data.action.includes('Ideas')) {\n    return `Generated ${data.ideas?.length || 'multiple'} content ideas for ${data.niche}`;\n  } else if (data.action && data.action.includes('Script')) {\n    return `Complete video script created for: ${data.videoTitle}`;\n  } else if (data.action && data.action.includes('Metadata')) {\n    return `SEO-optimized metadata including title, description, and tags`;\n  }\n  return 'YouTube content generated by AI agent';\n}\n\nreturn { json: notionData };"
+      },
+      "id": "format-for-notion",
+      "name": "Format for Notion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 350]
+    },
+    {
+      "parameters": {
+        "model": "gemini-2.0-flash-exp",
+        "options": {
+          "temperature": 0.8,
+          "maxOutputTokens": 2048
+        },
+        "text": "=You are a creative thumbnail designer and visual strategist. Generate detailed thumbnail concepts:\n\nVideo Title: {{$json.videoTitle}}\nNiche: {{$json.niche}}\nTarget Audience: {{$json.targetAudience}}\n\nCreate 5 thumbnail concepts with:\n\n1. MAIN VISUAL\n   - Primary image/photo description\n   - Suggested emotion/expression\n   - Background style\n\n2. TEXT OVERLAY\n   - Exact text to use (3-5 words max)\n   - Font style suggestions\n   - Text placement\n   - Text color and effects\n\n3. COLOR SCHEME\n   - Primary color\n   - Secondary color\n   - Accent color\n   - Overall mood\n\n4. DESIGN ELEMENTS\n   - Icons/graphics to include\n   - Arrows/emphasis elements\n   - Border/frame style\n\n5. PSYCHOLOGICAL TRIGGERS\n   - What emotion does it evoke?\n   - Why would someone click?\n   - Curiosity gap created\n\n6. DESIGN TOOLS\n   - Canva template suggestion\n   - Photoshop technique\n   - Stock photo keywords\n\nEach concept should be different in style and approach.\nFormat as JSON array."
+      },
+      "id": "gemini-thumbnail-concepts",
+      "name": "Gemini: Thumbnail Concepts",
+      "type": "n8n-nodes-base.googleGemini",
+      "typeVersion": 1,
+      "position": [850, 800],
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "4",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "contains",
+              "value2": "Thumbnail"
+            }
+          ]
+        }
+      },
+      "id": "route-thumbnail",
+      "name": "Route: Thumbnail Concepts",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 800]
+    },
+    {
+      "parameters": {},
+      "id": "merge-outputs",
+      "name": "Merge All Outputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [1650, 600]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Full pipeline orchestrator\n// This runs all steps in sequence: Ideas -> Script -> Metadata\n\nconst userInput = $input.item.json;\n\nreturn {\n  json: {\n    pipeline: 'full',\n    steps: [\n      'Generate 5 content ideas',\n      'User selects best idea',\n      'Generate script for selected idea',\n      'Optimize metadata',\n      'Save to Drive and Notion',\n      'Send notification'\n    ],\n    userInput: userInput,\n    currentStep: 1,\n    totalSteps: 6\n  }\n};"
+      },
+      "id": "full-pipeline-orchestrator",
+      "name": "Full Pipeline Orchestrator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 650]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Error handler and fallback logic\nconst input = $input.item.json;\n\nif (input.error) {\n  return {\n    json: {\n      status: 'error',\n      message: 'An error occurred during processing',\n      error: input.error,\n      fallbackAction: 'Using OpenAI for retry',\n      timestamp: new Date().toISOString()\n    }\n  };\n}\n\nreturn { json: input };"
+      },
+      "id": "error-handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 600]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "User Input Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "User Input Handler": {
+      "main": [
+        [
+          {
+            "node": "Route: Content Ideas",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route: Script Writing",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route: Metadata Optimization",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route: Full Pipeline",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route: Thumbnail Concepts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Content Ideas": {
+      "main": [
+        [
+          {
+            "node": "Gemini: Generate Content Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Script Writing": {
+      "main": [
+        [
+          {
+            "node": "Gemini: Write Video Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Metadata Optimization": {
+      "main": [
+        [
+          {
+            "node": "Gemini: Optimize Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Full Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Full Pipeline Orchestrator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Thumbnail Concepts": {
+      "main": [
+        [
+          {
+            "node": "Gemini: Thumbnail Concepts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: Generate Content Ideas": {
+      "main": [
+        [
+          {
+            "node": "Process AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: Write Video Script": {
+      "main": [
+        [
+          {
+            "node": "Process AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: Optimize Metadata": {
+      "main": [
+        [
+          {
+            "node": "Process AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: Thumbnail Concepts": {
+      "main": [
+        [
+          {
+            "node": "Process AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process AI Output": {
+      "main": [
+        [
+          {
+            "node": "Format for Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Format for Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Notion": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Save to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Notion": {
+      "main": [
+        [
+          {
+            "node": "Send Gmail Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Full Pipeline Orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Gemini: Generate Content Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-01-19T00:00:00.000Z",
+  "versionId": "1"
+}
