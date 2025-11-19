@@ -1,0 +1,295 @@
+{
+  "name": "Workflow 1: Real-time Trading Analysis (Every 30 min)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define symbols to analyze\nconst symbols = ['EURUSD', 'GBPUSD', 'USDJPY'];\nconst timeframe = 'M30';\n\nreturn symbols.map(symbol => ({\n  json: {\n    symbol,\n    timeframe\n  }\n}));"
+      },
+      "id": "set-symbols",
+      "name": "Set Trading Symbols",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=-- Get historical trades with outcomes for RAG context\nSELECT \n  symbol,\n  direction,\n  entry_price,\n  stop_loss,\n  take_profit,\n  confidence,\n  rationale,\n  is_win,\n  created_at,\n  actual_exit_price,\n  pnl\nFROM trade_ideas\nWHERE symbol = '{{ $json.symbol }}'\n  AND is_win IS NOT NULL  -- Only include trades with known outcomes\nORDER BY created_at DESC\nLIMIT 10",
+        "options": {}
+      },
+      "id": "get-rag-context",
+      "name": "Get Historical Trades (RAG)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [680, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build RAG context from historical trades with outcomes\nconst symbol = $('Set Trading Symbols').item.json.symbol;\nconst timeframe = $('Set Trading Symbols').item.json.timeframe;\nconst historicalTrades = $input.all();\n\nlet ragContext = 'No historical trades with outcomes available yet.';\n\nif (historicalTrades.length > 0) {\n  const contextLines = historicalTrades.map((item, idx) => {\n    const data = item.json;\n    const outcome = data.is_win === true ? '✓ WIN' : '✗ LOSS';\n    const pnl = data.pnl ? `${data.pnl > 0 ? '+' : ''}${parseFloat(data.pnl).toFixed(2)} pips` : 'N/A';\n    \n    return `${idx + 1}. [${data.created_at.split('T')[0]}] ${data.direction} - ${outcome}\n   Entry: ${parseFloat(data.entry_price).toFixed(5)} | Exit: ${parseFloat(data.actual_exit_price || 0).toFixed(5)}\n   P&L: ${pnl} | Confidence: ${(parseFloat(data.confidence) * 100).toFixed(0)}%\n   Rationale: ${data.rationale}`;\n  });\n  \n  // Calculate win rate\n  const wins = historicalTrades.filter(t => t.json.is_win === true).length;\n  const winRate = ((wins / historicalTrades.length) * 100).toFixed(1);\n  \n  ragContext = `Historical Performance for ${symbol}:\nWin Rate: ${winRate}% (${wins}/${historicalTrades.length} trades)\n\nRecent Trades:\n${contextLines.join('\\n\\n')}`;\n}\n\nreturn {\n  json: {\n    symbol,\n    timeframe,\n    ragContext,\n    historicalCount: historicalTrades.length\n  }\n};"
+      },
+      "id": "format-rag",
+      "name": "Format RAG Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build comprehensive prompt for Grok to do real-time research\nconst symbol = $json.symbol;\nconst timeframe = $json.timeframe;\nconst ragContext = $json.ragContext;\n\nconst prompt = `You are an expert forex trading analyst with access to real-time market data and research capabilities.\n\n**TASK: REAL-TIME MARKET RESEARCH & ANALYSIS**\n\nSymbol: ${symbol}\nTimeframe: ${timeframe}\n\n**STEP 1: CONDUCT RESEARCH**\nAnalyze the current market conditions for ${symbol} by considering:\n1. Current price action and trend direction\n2. Support and resistance levels\n3. Technical indicators (RSI, MACD, Moving Averages)\n4. Market sentiment and news events\n5. Volume analysis\n6. Chart patterns\n\n**STEP 2: LEARN FROM HISTORY**\nConsider these past trading outcomes for ${symbol}:\n\n${ragContext}\n\n**STEP 3: PROVIDE ANALYSIS**\nBased on your real-time research and historical patterns, provide a detailed trading recommendation.\n\n**CRITICAL: Respond with ONLY this exact JSON format (no markdown, no code blocks):**\n\n{\n  \"symbol\": \"${symbol}\",\n  \"timeframe\": \"${timeframe}\",\n  \"direction\": \"LONG\" | \"SHORT\" | \"FLAT\",\n  \"entry_price\": <realistic price>,\n  \"stop_loss\": <realistic price>,\n  \"take_profit\": <realistic price>,\n  \"confidence\": <0.0 to 1.0>,\n  \"analysis\": \"Detailed multi-sentence analysis explaining:\n    - Current market conditions you researched\n    - Why this direction is recommended\n    - Key support/resistance levels\n    - Risk factors identified\n    - How historical patterns influenced this decision\",\n  \"research_summary\": \"Brief summary of real-time data you analyzed\",\n  \"notes\": \"Additional risk warnings or observations\"\n}\n\n**REQUIREMENTS:**\n1. confidence must be 0.0 to 1.0 (e.g., 0.75 = 75% confident)\n2. direction must be exactly \"LONG\", \"SHORT\", or \"FLAT\"\n3. If market is unclear/risky, use \"FLAT\" and lower confidence\n4. Base confidence on:\n   - Strength of technical signals\n   - Confluence of indicators\n   - Historical win rate on similar setups\n   - Current market volatility\n5. Prices must be realistic for ${symbol}\n6. analysis must be detailed (at least 3-4 sentences)\n\n**RESPOND WITH JSON ONLY (no other text):**`;\n\nreturn {\n  json: {\n    symbol,\n    timeframe,\n    prompt,\n    ragContext\n  }\n};"
+      },
+      "id": "build-prompt",
+      "name": "Build Research Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.x.ai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"grok-beta\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a professional forex trading analyst. You have real-time market access and research capabilities. Always respond with valid JSON only.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.prompt }}\"\n    }\n  ],\n  \"temperature\": 0.7,\n  \"max_tokens\": 800\n}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "call-grok",
+      "name": "Call Grok for Real-time Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "grok-api-key",
+          "name": "Grok API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and validate Grok's analysis response\nlet content = $json.choices?.[0]?.message?.content;\n\nif (!content) {\n  throw new Error('No content in Grok API response');\n}\n\n// Clean markdown if present\ncontent = content.trim();\nif (content.includes('```')) {\n  content = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '');\n}\n\n// Parse JSON\nlet analysis;\ntry {\n  analysis = JSON.parse(content);\n} catch (error) {\n  throw new Error(`Failed to parse JSON: ${error.message}\\nContent: ${content}`);\n}\n\n// Validate required fields\nconst required = ['symbol', 'timeframe', 'direction', 'entry_price', 'stop_loss', 'take_profit', 'confidence', 'analysis'];\nfor (const field of required) {\n  if (analysis[field] === undefined || analysis[field] === null) {\n    throw new Error(`Missing required field: ${field}`);\n  }\n}\n\n// Validate direction\nif (!['LONG', 'SHORT', 'FLAT'].includes(analysis.direction)) {\n  throw new Error(`Invalid direction: ${analysis.direction}. Must be LONG, SHORT, or FLAT.`);\n}\n\n// Validate confidence (0 to 1)\nconst confidence = parseFloat(analysis.confidence);\nif (isNaN(confidence) || confidence < 0 || confidence > 1) {\n  throw new Error(`Invalid confidence: ${analysis.confidence}. Must be between 0.0 and 1.0.`);\n}\n\n// Validate prices\nconst prices = ['entry_price', 'stop_loss', 'take_profit'];\nfor (const priceField of prices) {\n  const price = parseFloat(analysis[priceField]);\n  if (isNaN(price) || price <= 0) {\n    throw new Error(`Invalid ${priceField}: ${analysis[priceField]}`);\n  }\n}\n\n// Convert confidence to proper decimal\nanalysis.confidence = confidence;\n\n// Add metadata\nanalysis.timestamp = new Date().toISOString();\nanalysis.confidencePercentage = (confidence * 100).toFixed(1) + '%';\n\nreturn { json: analysis };"
+      },
+      "id": "parse-analysis",
+      "name": "Parse & Validate Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.confidence }}",
+              "operation": "largerEqual",
+              "value2": 0.7
+            }
+          ]
+        }
+      },
+      "id": "check-confidence",
+      "name": "Confidence > 70%?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "trade_ideas",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "symbol": "={{ $json.symbol }}",
+            "timeframe": "={{ $json.timeframe }}",
+            "direction": "={{ $json.direction }}",
+            "entry_price": "={{ $json.entry_price }}",
+            "stop_loss": "={{ $json.stop_loss }}",
+            "take_profit": "={{ $json.take_profit }}",
+            "confidence": "={{ $json.confidence }}",
+            "rationale": "={{ $json.analysis }}",
+            "notes": "={{ ($json.notes || '') + ' | Research: ' + ($json.research_summary || '') }}",
+            "raw_response": "={{ JSON.stringify($json) }}"
+          }
+        },
+        "options": {
+          "returnFields": "id,symbol,direction,confidence,created_at"
+        }
+      },
+      "id": "save-to-db",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2000, 180],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build detailed email for high-confidence trade\nconst trade = $('Parse & Validate Analysis').item.json;\nconst emoji = trade.direction === 'LONG' ? '📈' : trade.direction === 'SHORT' ? '📉' : '⏸️';\nconst confidencePercent = trade.confidencePercentage;\n\n// Calculate Risk/Reward\nconst risk = Math.abs(trade.entry_price - trade.stop_loss);\nconst reward = Math.abs(trade.take_profit - trade.entry_price);\nconst rr = risk > 0 ? `1:${(reward/risk).toFixed(2)}` : 'N/A';\n\nconst html = `\n<!DOCTYPE html>\n<html>\n<head>\n<style>\n  body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; margin: 0; }\n  .container { background: white; border-radius: 10px; padding: 30px; max-width: 650px; margin: 0 auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }\n  .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 25px; }\n  .header h1 { margin: 0; font-size: 24px; }\n  .confidence-badge { background: #10b981; color: white; padding: 8px 16px; border-radius: 20px; display: inline-block; font-weight: bold; font-size: 18px; margin-top: 10px; }\n  .trade-info { background: #f8fafc; border-radius: 8px; padding: 20px; margin: 20px 0; }\n  .info-row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #e2e8f0; }\n  .info-row:last-child { border-bottom: none; }\n  .label { font-weight: 600; color: #64748b; }\n  .value { color: #1e293b; font-weight: 500; }\n  .direction-long { color: #10b981; font-weight: bold; font-size: 18px; }\n  .direction-short { color: #ef4444; font-weight: bold; font-size: 18px; }\n  .analysis-section { background: #eff6ff; border-left: 4px solid #3b82f6; padding: 20px; margin: 20px 0; border-radius: 4px; }\n  .analysis-section h3 { margin-top: 0; color: #1e40af; }\n  .research-section { background: #f0fdf4; border-left: 4px solid #10b981; padding: 20px; margin: 20px 0; border-radius: 4px; }\n  .research-section h3 { margin-top: 0; color: #065f46; }\n  .notes-section { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 15px 0; border-radius: 4px; font-size: 14px; }\n  .footer { text-align: center; color: #94a3b8; font-size: 13px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0; }\n</style>\n</head>\n<body>\n<div class=\"container\">\n  <div class=\"header\">\n    <h1>${emoji} HIGH CONFIDENCE TRADE SIGNAL</h1>\n    <div class=\"confidence-badge\">Confidence: ${confidencePercent}</div>\n  </div>\n\n  <div class=\"trade-info\">\n    <div class=\"info-row\">\n      <span class=\"label\">Symbol:</span>\n      <span class=\"value\"><strong style=\"font-size: 18px;\">${trade.symbol}</strong></span>\n    </div>\n    <div class=\"info-row\">\n      <span class=\"label\">Direction:</span>\n      <span class=\"value direction-${trade.direction.toLowerCase()}\">${trade.direction}</span>\n    </div>\n    <div class=\"info-row\">\n      <span class=\"label\">Timeframe:</span>\n      <span class=\"value\">${trade.timeframe}</span>\n    </div>\n    <div class=\"info-row\">\n      <span class=\"label\">Entry Price:</span>\n      <span class=\"value\">${parseFloat(trade.entry_price).toFixed(5)}</span>\n    </div>\n    <div class=\"info-row\">\n      <span class=\"label\">Stop Loss:</span>\n      <span class=\"value\">${parseFloat(trade.stop_loss).toFixed(5)}</span>\n    </div>\n    <div class=\"info-row\">\n      <span class=\"label\">Take Profit:</span>\n      <span class=\"value\">${parseFloat(trade.take_profit).toFixed(5)}</span>\n    </div>\n    <div class=\"info-row\">\n      <span class=\"label\">Risk/Reward:</span>\n      <span class=\"value\" style=\"color: #10b981; font-weight: bold;\">${rr}</span>\n    </div>\n  </div>\n\n  ${trade.research_summary ? `\n  <div class=\"research-section\">\n    <h3>🔍 Real-time Research Summary</h3>\n    <p>${trade.research_summary}</p>\n  </div>\n  ` : ''}\n\n  <div class=\"analysis-section\">\n    <h3>📊 Detailed Analysis</h3>\n    <p style=\"line-height: 1.6; color: #334155;\">${trade.analysis}</p>\n  </div>\n\n  ${trade.notes ? `\n  <div class=\"notes-section\">\n    <strong>⚠️ Important Notes:</strong><br>\n    ${trade.notes}\n  </div>\n  ` : ''}\n\n  <div class=\"footer\">\n    <p><strong>Automated Trading Analysis System</strong></p>\n    <p>Generated: ${new Date(trade.timestamp).toLocaleString()}</p>\n    <p style=\"font-size: 11px; margin-top: 10px;\">⚠️ This is an automated analysis. Always conduct your own research before trading.</p>\n  </div>\n</div>\n</body>\n</html>\n`;\n\nconst subject = `${emoji} HIGH CONFIDENCE (${confidencePercent}) - ${trade.symbol} ${trade.direction}`;\n\nreturn {\n  json: {\n    subject: subject,\n    html: html,\n    trade: trade\n  }\n};"
+      },
+      "id": "build-email",
+      "name": "Build Email Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 180]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.EMAIL_FROM }}",
+        "toEmail": "={{ $env.EMAIL_TO }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Gmail Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2440, 180],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "analysis_logs",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "REJECTED_LOW_CONFIDENCE",
+            "confidence": "={{ $json.confidence }}",
+            "confidence_threshold": 0.7,
+            "grok_response": "={{ JSON.stringify($json) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-rejected",
+      "name": "Log Low Confidence (Do Nothing)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2000, 420],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"workflow\": \"Real-time Trading Analysis\",\n  \"timestamp\": \"{{ $now.toISO() }}\",\n  \"symbol\": \"{{ $('Parse & Validate Analysis').item.json.symbol }}\",\n  \"confidence\": \"{{ $('Parse & Validate Analysis').item.json.confidencePercentage }}\",\n  \"direction\": \"{{ $('Parse & Validate Analysis').item.json.direction }}\",\n  \"action_taken\": \"{{ $('Parse & Validate Analysis').item.json.confidence >= 0.7 ? 'SAVED & NOTIFIED' : 'REJECTED (LOW CONFIDENCE)' }}\",\n  \"saved_to_database\": \"{{ $('Parse & Validate Analysis').item.json.confidence >= 0.7 ? 'YES' : 'NO' }}\",\n  \"email_sent\": \"{{ $('Parse & Validate Analysis').item.json.confidence >= 0.7 ? 'YES' : 'NO' }}\"\n}"
+      },
+      "id": "summary",
+      "name": "Execution Summary",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [2660, 300]
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [[{"node": "Set Trading Symbols", "type": "main", "index": 0}]]
+    },
+    "Set Trading Symbols": {
+      "main": [[{"node": "Get Historical Trades (RAG)", "type": "main", "index": 0}]]
+    },
+    "Get Historical Trades (RAG)": {
+      "main": [[{"node": "Format RAG Context", "type": "main", "index": 0}]]
+    },
+    "Format RAG Context": {
+      "main": [[{"node": "Build Research Prompt", "type": "main", "index": 0}]]
+    },
+    "Build Research Prompt": {
+      "main": [[{"node": "Call Grok for Real-time Analysis", "type": "main", "index": 0}]]
+    },
+    "Call Grok for Real-time Analysis": {
+      "main": [[{"node": "Parse & Validate Analysis", "type": "main", "index": 0}]]
+    },
+    "Parse & Validate Analysis": {
+      "main": [[{"node": "Confidence > 70%?", "type": "main", "index": 0}]]
+    },
+    "Confidence > 70%?": {
+      "main": [
+        [{"node": "Save to Database", "type": "main", "index": 0}],
+        [{"node": "Log Low Confidence (Do Nothing)", "type": "main", "index": 0}]
+      ]
+    },
+    "Save to Database": {
+      "main": [[{"node": "Build Email Notification", "type": "main", "index": 0}]]
+    },
+    "Build Email Notification": {
+      "main": [[{"node": "Send Gmail Notification", "type": "main", "index": 0}]]
+    },
+    "Send Gmail Notification": {
+      "main": [[{"node": "Execution Summary", "type": "main", "index": 0}]]
+    },
+    "Log Low Confidence (Do Nothing)": {
+      "main": [[{"node": "Execution Summary", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-11-19T01:00:00.000Z",
+  "versionId": "1"
+}

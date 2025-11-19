@@ -1,0 +1,213 @@
+{
+  "name": "Workflow 2: Daily Outcome Updater (Check Win/Loss)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "daily-trigger",
+      "name": "Daily at 2 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Get trades from yesterday or older that need outcome verification\nSELECT \n  id,\n  symbol,\n  timeframe,\n  direction,\n  entry_price,\n  stop_loss,\n  take_profit,\n  confidence,\n  rationale,\n  created_at\nFROM trade_ideas\nWHERE is_win IS NULL  -- Not yet evaluated\n  AND created_at < NOW() - INTERVAL '1 day'  -- At least 1 day old\nORDER BY created_at ASC\nLIMIT 20",
+        "options": {}
+      },
+      "id": "get-unevaluated",
+      "name": "Get Unevaluated Trades",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [460, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.id }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "check-trades-exist",
+      "name": "Any Trades to Check?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build prompt for Grok to research actual market outcome\nconst trade = $json;\n\n// Calculate how many days ago the trade was created\nconst createdDate = new Date(trade.created_at);\nconst now = new Date();\nconst daysAgo = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));\n\nconst prompt = `You are a forex market researcher with access to historical price data.\n\n**TASK: DETERMINE TRADE OUTCOME**\n\nA trading position was opened ${daysAgo} day(s) ago. Research what actually happened in the market and determine if it was a WIN or LOSS.\n\n**TRADE DETAILS:**\n- Symbol: ${trade.symbol}\n- Direction: ${trade.direction}\n- Entry Price: ${parseFloat(trade.entry_price).toFixed(5)}\n- Stop Loss: ${parseFloat(trade.stop_loss).toFixed(5)}\n- Take Profit: ${parseFloat(trade.take_profit).toFixed(5)}\n- Opened: ${trade.created_at} (${daysAgo} days ago)\n- Original Rationale: ${trade.rationale}\n\n**YOUR RESEARCH STEPS:**\n1. Look up the actual historical price movement for ${trade.symbol} from ${trade.created_at} until now\n2. Determine if the price hit the STOP LOSS or TAKE PROFIT first\n3. If ${trade.direction} was:\n   - LONG: Price going UP to take_profit = WIN, price going DOWN to stop_loss = LOSS\n   - SHORT: Price going DOWN to take_profit = WIN, price going UP to stop_loss = LOSS\n   - FLAT: Consider as LOSS (no action taken)\n4. Find the actual exit price (whichever was hit first: SL or TP)\n5. Calculate the profit/loss in pips\n\n**RESPOND WITH ONLY THIS EXACT JSON (no markdown, no code blocks):**\n\n{\n  \"trade_id\": ${trade.id},\n  \"symbol\": \"${trade.symbol}\",\n  \"is_win\": true | false,\n  \"actual_exit_price\": <the price where SL or TP was hit>,\n  \"pnl\": <profit/loss in pips (positive for profit, negative for loss)>,\n  \"outcome_explanation\": \"Detailed explanation of what happened in the market:\n    - What was the price movement after entry\n    - Which level was hit (SL or TP)\n    - Why this resulted in a win or loss\n    - Any notable market events during this period\",\n  \"research_notes\": \"Brief notes on the market data you analyzed\"\n}\n\n**CRITICAL REQUIREMENTS:**\n1. is_win must be boolean (true or false)\n2. actual_exit_price must be a realistic price for ${trade.symbol}\n3. pnl must be a number (positive for win, negative for loss)\n4. Base your answer on ACTUAL market data research, not speculation\n5. If you cannot determine the outcome with confidence, set is_win to false\n\n**RESPOND WITH JSON ONLY:**`;\n\nreturn {\n  json: {\n    trade_id: trade.id,\n    symbol: trade.symbol,\n    direction: trade.direction,\n    entry_price: trade.entry_price,\n    stop_loss: trade.stop_loss,\n    take_profit: trade.take_profit,\n    created_at: trade.created_at,\n    prompt: prompt\n  }\n};"
+      },
+      "id": "build-outcome-prompt",
+      "name": "Build Outcome Research Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.x.ai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"grok-beta\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a market research analyst with access to historical forex price data. You analyze past trades to determine their actual outcomes. Always respond with valid JSON only.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.prompt }}\"\n    }\n  ],\n  \"temperature\": 0.3,\n  \"max_tokens\": 600\n}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "call-grok-outcome",
+      "name": "Call Grok for Outcome Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 240],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "grok-api-key",
+          "name": "Grok API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Grok's outcome research response\nlet content = $json.choices?.[0]?.message?.content;\n\nif (!content) {\n  throw new Error('No content in Grok outcome response');\n}\n\n// Clean markdown\ncontent = content.trim();\nif (content.includes('```')) {\n  content = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '');\n}\n\n// Parse JSON\nlet outcome;\ntry {\n  outcome = JSON.parse(content);\n} catch (error) {\n  throw new Error(`Failed to parse outcome JSON: ${error.message}\\nContent: ${content}`);\n}\n\n// Validate required fields\nif (outcome.trade_id === undefined) {\n  throw new Error('Missing trade_id in outcome response');\n}\n\nif (typeof outcome.is_win !== 'boolean') {\n  throw new Error(`is_win must be boolean, got: ${typeof outcome.is_win}`);\n}\n\nif (!outcome.actual_exit_price || isNaN(parseFloat(outcome.actual_exit_price))) {\n  throw new Error('Invalid actual_exit_price');\n}\n\nif (outcome.pnl === undefined || isNaN(parseFloat(outcome.pnl))) {\n  throw new Error('Invalid pnl value');\n}\n\n// Ensure proper types\noutcome.trade_id = parseInt(outcome.trade_id);\noutcome.actual_exit_price = parseFloat(outcome.actual_exit_price);\noutcome.pnl = parseFloat(outcome.pnl);\noutcome.is_win = Boolean(outcome.is_win);\n\nreturn { json: outcome };"
+      },
+      "id": "parse-outcome",
+      "name": "Parse Outcome Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 240]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=-- Update trade with outcome\nUPDATE trade_ideas\nSET \n  is_win = {{ $json.is_win }},\n  actual_exit_price = {{ $json.actual_exit_price }},\n  pnl = {{ $json.pnl }},\n  evaluated_at = CURRENT_TIMESTAMP,\n  notes = COALESCE(notes, '') || E'\\n\\nOUTCOME: ' || '{{ $json.outcome_explanation }}'\nWHERE id = {{ $json.trade_id }}\nRETURNING id, symbol, direction, is_win, pnl",
+        "options": {}
+      },
+      "id": "update-outcome",
+      "name": "Update Trade Outcome in DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1560, 240],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all updated trades\nconst updates = $input.all();\n\nif (updates.length === 0) {\n  return {\n    json: {\n      total_checked: 0,\n      wins: 0,\n      losses: 0,\n      message: 'No trades were updated'\n    }\n  };\n}\n\nconst wins = updates.filter(u => u.json.is_win === true).length;\nconst losses = updates.filter(u => u.json.is_win === false).length;\nconst winRate = ((wins / updates.length) * 100).toFixed(1);\n\nconst summary = {\n  total_checked: updates.length,\n  wins: wins,\n  losses: losses,\n  win_rate: winRate + '%',\n  timestamp: new Date().toISOString(),\n  details: updates.map(u => ({\n    id: u.json.id,\n    symbol: u.json.symbol,\n    direction: u.json.direction,\n    outcome: u.json.is_win ? 'WIN' : 'LOSS',\n    pnl: parseFloat(u.json.pnl).toFixed(2)\n  }))\n};\n\nreturn { json: summary };"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build summary email for outcome updates\nconst summary = $json;\n\nif (summary.total_checked === 0) {\n  return {\n    json: {\n      subject: '✅ Daily Outcome Update - No Trades to Check',\n      html: `\n<!DOCTYPE html>\n<html>\n<body style=\"font-family: Arial; padding: 20px;\">\n  <h2>Daily Trade Outcome Update</h2>\n  <p>No trades required outcome verification today.</p>\n  <p><small>${new Date().toLocaleString()}</small></p>\n</body>\n</html>\n      `\n    }\n  };\n}\n\nconst winEmoji = '✅';\nconst lossEmoji = '❌';\n\nconst detailRows = summary.details.map(d => `\n  <tr style=\"border-bottom: 1px solid #e2e8f0;\">\n    <td style=\"padding: 12px;\">${d.outcome === 'WIN' ? winEmoji : lossEmoji} ${d.symbol}</td>\n    <td style=\"padding: 12px;\">${d.direction}</td>\n    <td style=\"padding: 12px; color: ${d.outcome === 'WIN' ? '#10b981' : '#ef4444'}; font-weight: bold;\">${d.outcome}</td>\n    <td style=\"padding: 12px; color: ${parseFloat(d.pnl) >= 0 ? '#10b981' : '#ef4444'};\">${parseFloat(d.pnl) >= 0 ? '+' : ''}${d.pnl} pips</td>\n  </tr>\n`).join('');\n\nconst html = `\n<!DOCTYPE html>\n<html>\n<head>\n<style>\n  body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; margin: 0; }\n  .container { background: white; border-radius: 10px; padding: 30px; max-width: 700px; margin: 0 auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }\n  .header { background: linear-gradient(135deg, #3b82f6 0%, #1e40af 100%); color: white; padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 25px; }\n  .stats { display: flex; justify-content: space-around; margin: 25px 0; }\n  .stat-box { text-align: center; padding: 20px; background: #f8fafc; border-radius: 8px; flex: 1; margin: 0 10px; }\n  .stat-number { font-size: 32px; font-weight: bold; margin: 10px 0; }\n  .stat-label { color: #64748b; font-size: 14px; }\n  .wins { color: #10b981; }\n  .losses { color: #ef4444; }\n  .win-rate { color: #3b82f6; }\n  table { width: 100%; border-collapse: collapse; margin: 20px 0; }\n  th { background: #f1f5f9; padding: 12px; text-align: left; font-weight: 600; color: #475569; }\n</style>\n</head>\n<body>\n<div class=\"container\">\n  <div class=\"header\">\n    <h1>📊 Daily Trade Outcome Update</h1>\n    <p style=\"margin: 5px 0 0 0; opacity: 0.9;\">${new Date().toLocaleDateString()}</p>\n  </div>\n\n  <div class=\"stats\">\n    <div class=\"stat-box\">\n      <div class=\"stat-number\">${summary.total_checked}</div>\n      <div class=\"stat-label\">Trades Checked</div>\n    </div>\n    <div class=\"stat-box\">\n      <div class=\"stat-number wins\">${summary.wins}</div>\n      <div class=\"stat-label\">Wins ${winEmoji}</div>\n    </div>\n    <div class=\"stat-box\">\n      <div class=\"stat-number losses\">${summary.losses}</div>\n      <div class=\"stat-label\">Losses ${lossEmoji}</div>\n    </div>\n    <div class=\"stat-box\">\n      <div class=\"stat-number win-rate\">${summary.win_rate}</div>\n      <div class=\"stat-label\">Win Rate</div>\n    </div>\n  </div>\n\n  <h3 style=\"margin-top: 30px; color: #1e293b;\">Trade Details:</h3>\n  <table>\n    <thead>\n      <tr>\n        <th>Symbol</th>\n        <th>Direction</th>\n        <th>Outcome</th>\n        <th>P&L</th>\n      </tr>\n    </thead>\n    <tbody>\n      ${detailRows}\n    </tbody>\n  </table>\n\n  <div style=\"background: #eff6ff; border-left: 4px solid #3b82f6; padding: 15px; margin-top: 25px; border-radius: 4px;\">\n    <p style=\"margin: 0; color: #1e40af;\"><strong>ℹ️ Note:</strong> These outcomes have been added to the database and will be used as historical context (RAG) for future trade analysis to improve pattern recognition.</p>\n  </div>\n\n  <div style=\"text-align: center; color: #94a3b8; font-size: 13px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0;\">\n    <p>Automated Outcome Verification System</p>\n    <p>${summary.timestamp}</p>\n  </div>\n</div>\n</body>\n</html>\n`;\n\nconst subject = `📊 Daily Update: ${summary.total_checked} Trades Verified - ${summary.win_rate} Win Rate`;\n\nreturn {\n  json: {\n    subject: subject,\n    html: html\n  }\n};"
+      },
+      "id": "build-summary-email",
+      "name": "Build Summary Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 240]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.EMAIL_FROM }}",
+        "toEmail": "={{ $env.EMAIL_TO }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-summary-email",
+      "name": "Send Summary Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2220, 240],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"message\": \"No trades to check today\",\n  \"timestamp\": \"{{ $now.toISO() }}\"\n}"
+      },
+      "id": "no-trades",
+      "name": "No Trades to Check",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [900, 360]
+    }
+  ],
+  "connections": {
+    "Daily at 2 AM": {
+      "main": [[{"node": "Get Unevaluated Trades", "type": "main", "index": 0}]]
+    },
+    "Get Unevaluated Trades": {
+      "main": [[{"node": "Any Trades to Check?", "type": "main", "index": 0}]]
+    },
+    "Any Trades to Check?": {
+      "main": [
+        [{"node": "Build Outcome Research Prompt", "type": "main", "index": 0}],
+        [{"node": "No Trades to Check", "type": "main", "index": 0}]
+      ]
+    },
+    "Build Outcome Research Prompt": {
+      "main": [[{"node": "Call Grok for Outcome Research", "type": "main", "index": 0}]]
+    },
+    "Call Grok for Outcome Research": {
+      "main": [[{"node": "Parse Outcome Result", "type": "main", "index": 0}]]
+    },
+    "Parse Outcome Result": {
+      "main": [[{"node": "Update Trade Outcome in DB", "type": "main", "index": 0}]]
+    },
+    "Update Trade Outcome in DB": {
+      "main": [[{"node": "Aggregate Results", "type": "main", "index": 0}]]
+    },
+    "Aggregate Results": {
+      "main": [[{"node": "Build Summary Email", "type": "main", "index": 0}]]
+    },
+    "Build Summary Email": {
+      "main": [[{"node": "Send Summary Email", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-11-19T01:00:00.000Z",
+  "versionId": "1"
+}
