@@ -1,0 +1,556 @@
+{
+  "name": "Audience-Problem Matcher",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "ba3f3d5e-8c7e-4b3d-9a2c-1e5f6a7b8c9d",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "topic_or_domain",
+              "value": ""
+            },
+            {
+              "name": "user_strengths",
+              "value": ""
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "User Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [450, 300],
+      "notes": "User provides their topic/domain and their skills/strengths"
+    },
+    {
+      "parameters": {
+        "url": "=http://suggestqueries.google.com/complete/search?client=firefox&q={{ encodeURIComponent($json.topic_or_domain) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "name": "Google Autosuggest API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 200],
+      "notes": "Fetch Google Autosuggest results for the topic"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.reddit.com/search.json?q={{ encodeURIComponent($json.topic_or_domain) }}&sort=relevance&limit=25",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+      "name": "Reddit Search API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 400],
+      "notes": "Fetch top Reddit posts/questions for the topic"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Merge and rank problems from Google Autosuggest and Reddit\n * Output: Top 10 problems ranked by frequency, popularity, relevance\n */\n\nconst items = $input.all();\nconst topic = items[0].json.topic_or_domain;\nconst problems = [];\n\n// Process Google Autosuggest results\nfor (const item of items) {\n  if (item.json.google_suggestions) {\n    const suggestions = item.json.google_suggestions;\n    if (Array.isArray(suggestions) && suggestions.length > 1) {\n      const queries = suggestions[1]; // Google returns [query, [suggestions]]\n      for (const query of queries) {\n        if (query.toLowerCase().includes('how') || \n            query.toLowerCase().includes('why') || \n            query.toLowerCase().includes('what') ||\n            query.toLowerCase().includes('problem')) {\n          problems.push({\n            problem: query,\n            source: 'google',\n            snippet: query,\n            score: 5 // Base score for Google suggestions\n          });\n        }\n      }\n    }\n  }\n  \n  // Process Reddit results\n  if (item.json.reddit_data) {\n    const redditData = item.json.reddit_data;\n    if (redditData.data && redditData.data.children) {\n      for (const post of redditData.data.children) {\n        const data = post.data;\n        const isQuestion = data.title.includes('?') || \n                          data.title.toLowerCase().includes('how') ||\n                          data.title.toLowerCase().includes('why') ||\n                          data.title.toLowerCase().includes('what');\n        \n        if (isQuestion || data.link_flair_text?.toLowerCase().includes('question')) {\n          // Calculate relevance score based on upvotes and comments\n          const upvoteScore = Math.min(data.ups / 100, 10);\n          const commentScore = Math.min(data.num_comments / 10, 5);\n          \n          problems.push({\n            problem: data.title,\n            source: 'reddit',\n            snippet: data.selftext ? data.selftext.substring(0, 200) : data.title,\n            subreddit: data.subreddit,\n            upvotes: data.ups,\n            comments: data.num_comments,\n            score: upvoteScore + commentScore\n          });\n        }\n      }\n    }\n  }\n}\n\n// Remove duplicates and rank by score\nconst uniqueProblems = [];\nconst seen = new Set();\n\nfor (const prob of problems) {\n  const normalized = prob.problem.toLowerCase().trim();\n  if (!seen.has(normalized)) {\n    seen.add(normalized);\n    uniqueProblems.push(prob);\n  }\n}\n\n// Sort by score descending and take top 10\nconst topProblems = uniqueProblems\n  .sort((a, b) => b.score - a.score)\n  .slice(0, 10);\n\n// Format output\nreturn topProblems.map((prob, index) => ({\n  json: {\n    rank: index + 1,\n    problem: prob.problem,\n    source: prob.source,\n    snippet: prob.snippet,\n    subreddit: prob.subreddit || null,\n    score: prob.score,\n    topic: topic\n  }\n}));"
+      },
+      "id": "d4e5f6a7-b8c9-0123-def1-234567890123",
+      "name": "Merge & Rank Problems",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "notes": "Merge Google and Reddit data, rank top 10 problems"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assignment1",
+              "name": "google_suggestions",
+              "value": "={{ $json[1] }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e5f6a7b8-c9d0-1234-ef12-345678901234",
+      "name": "Format Google Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assignment1",
+              "name": "reddit_data",
+              "value": "={{ $json }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f6a7b8c9-d0e1-2345-f123-456789012345",
+      "name": "Format Reddit Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "a7b8c9d0-e1f2-3456-1234-567890123456",
+      "name": "Split Problems",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1050, 300],
+      "notes": "Process each problem individually through the pipeline"
+    },
+    {
+      "parameters": {
+        "url": "=https://trends.google.com/trends/api/explore?hl=en-US&tz=0&req=%7B%22comparisonItem%22%3A%5B%7B%22keyword%22%3A%22{{ encodeURIComponent($json.problem) }}%22%2C%22geo%22%3A%22%22%2C%22time%22%3A%22today%2012-m%22%7D%5D%2C%22category%22%3A0%2C%22property%22%3A%22%22%7D",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "b8c9d0e1-f2a3-4567-2345-678901234567",
+      "name": "Google Trends API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1250, 200],
+      "notes": "Fetch trend data for each problem (Note: May need API key or alternative service)"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Extract trend insights from Google Trends response\n * Output: trend_score, growth_label, popularity, seasonality\n */\n\nconst item = $input.first();\nconst problem = item.json.problem;\nlet trendsData = null;\n\n// Try to parse Google Trends response (they use a weird format with )]}' prefix)\nif (item.json.body) {\n  try {\n    const cleanData = item.json.body.replace(/^\\)\\]\\}',?\\n?/, '');\n    trendsData = JSON.parse(cleanData);\n  } catch (e) {\n    // If parsing fails, set defaults\n  }\n}\n\n// Calculate trend metrics\nlet trendScore = 50; // Default\nlet growthLabel = 'steady';\nlet popularity = 50;\nlet seasonality = 'no';\n\nif (trendsData && trendsData.default && trendsData.default.timelineData) {\n  const timeline = trendsData.default.timelineData;\n  \n  if (timeline.length >= 2) {\n    const values = timeline.map(t => t.value[0]);\n    const recent = values.slice(-3).reduce((a, b) => a + b, 0) / 3;\n    const older = values.slice(0, 3).reduce((a, b) => a + b, 0) / 3;\n    \n    // Calculate growth\n    const growth = ((recent - older) / (older || 1)) * 100;\n    \n    if (growth > 20) growthLabel = 'up';\n    else if (growth < -20) growthLabel = 'down';\n    else growthLabel = 'steady';\n    \n    // Average popularity\n    popularity = Math.round(values.reduce((a, b) => a + b, 0) / values.length);\n    trendScore = popularity;\n    \n    // Detect seasonality (simple variance check)\n    const mean = values.reduce((a, b) => a + b, 0) / values.length;\n    const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;\n    seasonality = variance > 400 ? 'yes' : 'no';\n  }\n}\n\nreturn [{\n  json: {\n    problem: problem,\n    trend_score: trendScore,\n    growth_label: growthLabel,\n    popularity: popularity,\n    seasonality: seasonality,\n    source: item.json.source,\n    snippet: item.json.snippet,\n    subreddit: item.json.subreddit,\n    rank: item.json.rank,\n    topic: item.json.topic\n  }\n}];"
+      },
+      "id": "c9d0e1f2-a3b4-5678-3456-789012345678",
+      "name": "Extract Trend Insights",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 200],
+      "notes": "Parse trends data and calculate growth, popularity, seasonality"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Identify likely personas based on problem context and Reddit source\n * Output: personas array, source_for_personas\n */\n\nconst item = $input.first();\nconst problem = item.json.problem.toLowerCase();\nconst subreddit = item.json.subreddit || '';\nconst snippet = item.json.snippet.toLowerCase();\n\n// Persona mapping based on keywords and subreddits\nconst personaRules = [\n  { keywords: ['beginner', 'start', 'new to', 'first time'], personas: ['Beginners', 'Newcomers'] },\n  { keywords: ['parent', 'mom', 'dad', 'baby', 'toddler'], personas: ['Parents', 'New moms', 'New dads'] },\n  { keywords: ['business', 'entrepreneur', 'startup'], personas: ['Entrepreneurs', 'Business owners', 'Startup founders'] },\n  { keywords: ['student', 'college', 'university', 'homework'], personas: ['Students', 'College students'] },\n  { keywords: ['freelance', 'side hustle', 'gig'], personas: ['Freelancers', 'Side-hustlers'] },\n  { keywords: ['invest', 'trading', 'stock', 'crypto'], personas: ['Investors', 'Traders', 'Crypto enthusiasts'] },\n  { keywords: ['fitness', 'workout', 'gym', 'weight loss'], personas: ['Fitness enthusiasts', 'Health-conscious individuals'] },\n  { keywords: ['developer', 'programmer', 'coding', 'software'], personas: ['Developers', 'Programmers', 'Tech professionals'] },\n  { keywords: ['design', 'ui', 'ux', 'graphic'], personas: ['Designers', 'Creatives'] },\n  { keywords: ['marketing', 'seo', 'content'], personas: ['Marketers', 'Content creators'] },\n  { keywords: ['remote work', 'work from home'], personas: ['Remote workers', 'Digital nomads'] },\n  { keywords: ['senior', 'elderly', 'retirement'], personas: ['Seniors', 'Retirees'] },\n  { keywords: ['budget', 'cheap', 'affordable', 'save money'], personas: ['Budget-conscious consumers', 'Frugal shoppers'] }\n];\n\n// Subreddit to persona mapping\nconst subredditPersonas = {\n  'fitness': ['Fitness enthusiasts'],\n  'learnprogramming': ['Beginner programmers', 'Self-learners'],\n  'entrepreneur': ['Entrepreneurs', 'Startup founders'],\n  'smallbusiness': ['Small business owners'],\n  'investing': ['Investors'],\n  'personalfinance': ['Budget-conscious individuals'],\n  'parenting': ['Parents'],\n  'college': ['College students']\n};\n\nconst identifiedPersonas = new Set();\n\n// Check keywords in problem and snippet\nfor (const rule of personaRules) {\n  for (const keyword of rule.keywords) {\n    if (problem.includes(keyword) || snippet.includes(keyword)) {\n      rule.personas.forEach(p => identifiedPersonas.add(p));\n    }\n  }\n}\n\n// Check subreddit\nif (subreddit && subredditPersonas[subreddit.toLowerCase()]) {\n  subredditPersonas[subreddit.toLowerCase()].forEach(p => identifiedPersonas.add(p));\n}\n\n// Default personas if none found\nif (identifiedPersonas.size === 0) {\n  identifiedPersonas.add('General audience');\n}\n\nreturn [{\n  json: {\n    ...item.json,\n    personas: Array.from(identifiedPersonas),\n    source_for_personas: subreddit || 'keyword analysis'\n  }\n}];"
+      },
+      "id": "d0e1f2a3-b4c5-6789-4567-890123456789",
+      "name": "Identify Personas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 400],
+      "notes": "Extract likely personas from problem context and subreddit"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.7
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert problem analyst. Analyze the given problem and identify 3-5 root causes explaining WHY this problem exists. Be specific and insightful."
+            },
+            {
+              "role": "user",
+              "content": "=Problem: {{ $json.problem }}\n\nContext: {{ $json.snippet }}\n\nTarget audience: {{ $json.personas.join(', ') }}\n\nPlease analyze WHY this problem exists and list 3-5 root causes. Return ONLY a JSON object in this exact format:\n{\n  \"root_causes\": [\"cause 1\", \"cause 2\", \"cause 3\"]\n}"
+            }
+          ]
+        }
+      },
+      "id": "e1f2a3b4-c5d6-7890-5678-901234567890",
+      "name": "Root Cause Analysis",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [1650, 200],
+      "notes": "Use LLM to analyze WHY the problem exists and identify root causes"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Parse LLM response and extract root causes\n */\n\nconst item = $input.first();\nconst previousData = $('Identify Personas').first().json;\n\nlet rootCauses = [];\n\n// Parse LLM response\ntry {\n  const llmResponse = item.json.response || item.json.output || item.json.message || '';\n  \n  // Try to extract JSON from response\n  const jsonMatch = llmResponse.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    const parsed = JSON.parse(jsonMatch[0]);\n    rootCauses = parsed.root_causes || [];\n  }\n} catch (e) {\n  // If parsing fails, set default\n  rootCauses = ['Multiple factors contribute to this problem'];\n}\n\nreturn [{\n  json: {\n    ...previousData,\n    root_causes: rootCauses\n  }\n}];"
+      },
+      "id": "f2a3b4c5-d6e7-8901-6789-012345678901",
+      "name": "Parse Root Causes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 200],
+      "notes": "Extract root causes from LLM response"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.7
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert business consultant specializing in matching people's skills with market opportunities. Analyze how well a person's strengths match a given problem/opportunity."
+            },
+            {
+              "role": "user",
+              "content": "=Problem/Opportunity: {{ $json.problem }}\n\nTarget Audience: {{ $json.personas.join(', ') }}\n\nRoot Causes: {{ $json.root_causes.join('; ') }}\n\nUser's Strengths: {{ $('User Input').first().json.user_strengths }}\n\nAnalyze how well the user's strengths match this opportunity. Return ONLY a JSON object in this exact format:\n{\n  \"fit_score\": 75,\n  \"fit_reason\": \"Your skills in X align well with this problem because...\"\n}\n\nfit_score should be 1-100, where 100 is perfect match."
+            }
+          ]
+        }
+      },
+      "id": "a3b4c5d6-e7f8-9012-7890-123456789012",
+      "name": "Match User Strengths",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [2050, 200],
+      "notes": "Use LLM to match user strengths with the problem"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Parse fit score and reason from LLM response\n */\n\nconst item = $input.first();\nconst previousData = $('Parse Root Causes').first().json;\n\nlet fitScore = 50; // Default\nlet fitReason = 'Moderate potential match';\n\n// Parse LLM response\ntry {\n  const llmResponse = item.json.response || item.json.output || item.json.message || '';\n  \n  // Try to extract JSON from response\n  const jsonMatch = llmResponse.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    const parsed = JSON.parse(jsonMatch[0]);\n    fitScore = parsed.fit_score || 50;\n    fitReason = parsed.fit_reason || fitReason;\n  }\n} catch (e) {\n  // Keep defaults\n}\n\nreturn [{\n  json: {\n    ...previousData,\n    fit_score: fitScore,\n    fit_reason: fitReason\n  }\n}];"
+      },
+      "id": "b4c5d6e7-f8a9-0123-8901-234567890123",
+      "name": "Parse Fit Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 200],
+      "notes": "Extract fit score and reason from LLM response"
+    },
+    {
+      "parameters": {},
+      "id": "c5d6e7f8-a9b0-1234-9012-345678901234",
+      "name": "Loop Back",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [2450, 200],
+      "notes": "Loop back to process next problem"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Aggregate all processed problems and prepare for final ranking\n */\n\nconst items = $input.all();\n\n// All problems are now enriched with trends, personas, root causes, and fit scores\nconst enrichedProblems = items.map(item => ({\n  json: item.json\n}));\n\nreturn enrichedProblems;"
+      },
+      "id": "d6e7f8a9-b0c1-2345-0123-456789012345",
+      "name": "Aggregate Problems",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2650, 300],
+      "notes": "Collect all enriched problems after loop completes"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.8
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert business strategist. Estimate the competition level (low/medium/high) for each niche opportunity based on the problem, trend data, and target audience."
+            },
+            {
+              "role": "user",
+              "content": "=Here are the analyzed problems:\n\n{{ JSON.stringify($input.all().map(item => ({\n  problem: item.json.problem,\n  trend: item.json.growth_label,\n  popularity: item.json.popularity,\n  personas: item.json.personas,\n  fit_score: item.json.fit_score\n})), null, 2) }}\n\nFor each problem, estimate the competition level as \"low\", \"medium\", or \"high\". Consider:\n- High popularity = higher competition\n- Growing trends = attracting more competition\n- Broad audiences = more competition\n- Niche/specific problems = lower competition\n\nReturn ONLY a JSON array in this exact format:\n[\n  {\n    \"problem\": \"the problem text\",\n    \"competition\": \"low/medium/high\"\n  }\n]"
+            }
+          ]
+        }
+      },
+      "id": "e7f8a9b0-c1d2-3456-1234-567890123456",
+      "name": "Estimate Competition",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [2850, 300],
+      "notes": "Use LLM to estimate competition level for each opportunity"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Parse competition estimates and create final niche recommendations\n */\n\nconst llmItem = $input.first();\nconst allProblems = $('Aggregate Problems').all();\n\nlet competitionMap = {};\n\n// Parse LLM competition estimates\ntry {\n  const llmResponse = llmItem.json.response || llmItem.json.output || llmItem.json.message || '';\n  const jsonMatch = llmResponse.match(/\\[[\\s\\S]*\\]/);\n  \n  if (jsonMatch) {\n    const parsed = JSON.parse(jsonMatch[0]);\n    parsed.forEach(item => {\n      competitionMap[item.problem] = item.competition || 'medium';\n    });\n  }\n} catch (e) {\n  // If parsing fails, set all to medium\n}\n\n// Build final niche recommendations\nconst niches = allProblems.map(item => {\n  const problem = item.json.problem;\n  const competition = competitionMap[problem] || 'medium';\n  \n  return {\n    niche: problem,\n    audience: item.json.personas.join(', '),\n    trend: `${item.json.growth_label} (popularity: ${item.json.popularity}/100)`,\n    competition: competition,\n    root_cause: item.json.root_causes.join('; '),\n    fit_reason: item.json.fit_reason,\n    fit_score: item.json.fit_score,\n    trend_score: item.json.trend_score,\n    popularity: item.json.popularity,\n    growth_label: item.json.growth_label,\n    source: item.json.source,\n    rank: item.json.rank\n  };\n});\n\n// Sort by fit_score (descending) and then by popularity\nconst rankedNiches = niches.sort((a, b) => {\n  if (b.fit_score !== a.fit_score) {\n    return b.fit_score - a.fit_score;\n  }\n  return b.popularity - a.popularity;\n});\n\n// Take top 5 for recommendations, keep all for raw data\nconst top5 = rankedNiches.slice(0, 5);\n\nreturn [{\n  json: {\n    top_recommendations: top5,\n    all_opportunities: rankedNiches,\n    total_analyzed: rankedNiches.length,\n    user_topic: allProblems[0]?.json.topic || '',\n    user_strengths: $('User Input').first().json.user_strengths\n  }\n}];"
+      },
+      "id": "f8a9b0c1-d2e3-4567-2345-678901234567",
+      "name": "Create Final Recommendations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3050, 300],
+      "notes": "Combine all data and create top 5 ranked niche opportunities"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Format final output with summary statistics and structured data\n */\n\nconst item = $input.first();\nconst data = item.json;\n\n// Calculate summary stats\nconst avgFitScore = data.top_recommendations.reduce((sum, r) => sum + r.fit_score, 0) / data.top_recommendations.length;\nconst highGrowthCount = data.all_opportunities.filter(o => o.growth_label === 'up').length;\nconst lowCompetitionCount = data.all_opportunities.filter(o => o.competition === 'low').length;\n\nconst output = {\n  summary: {\n    topic_analyzed: data.user_topic,\n    user_strengths: data.user_strengths,\n    total_problems_found: data.total_analyzed,\n    top_opportunities_count: data.top_recommendations.length,\n    average_fit_score: Math.round(avgFitScore),\n    high_growth_opportunities: highGrowthCount,\n    low_competition_opportunities: lowCompetitionCount,\n    generated_at: new Date().toISOString()\n  },\n  \n  top_5_recommendations: data.top_recommendations.map((rec, idx) => ({\n    rank: idx + 1,\n    niche: rec.niche,\n    audience: rec.audience,\n    trend: rec.trend,\n    competition: rec.competition,\n    root_cause: rec.root_cause,\n    fit_score: rec.fit_score,\n    fit_reason: rec.fit_reason,\n    recommendation_quality: rec.fit_score >= 70 ? 'High' : rec.fit_score >= 50 ? 'Medium' : 'Low'\n  })),\n  \n  raw_data: {\n    all_problems: data.all_opportunities.map(opp => ({\n      problem: opp.niche,\n      source: opp.source,\n      personas: opp.audience,\n      trend_score: opp.trend_score,\n      growth: opp.growth_label,\n      popularity: opp.popularity,\n      competition: opp.competition,\n      root_causes: opp.root_cause.split('; '),\n      fit_score: opp.fit_score\n    }))\n  },\n  \n  insights: {\n    best_match: data.top_recommendations[0]?.niche || 'N/A',\n    best_match_score: data.top_recommendations[0]?.fit_score || 0,\n    trending_problems: data.all_opportunities\n      .filter(o => o.growth_label === 'up')\n      .slice(0, 3)\n      .map(o => o.niche),\n    low_competition_niches: data.all_opportunities\n      .filter(o => o.competition === 'low')\n      .slice(0, 3)\n      .map(o => o.niche)\n  }\n};\n\nreturn [{ json: output }];"
+      },
+      "id": "a9b0c1d2-e3f4-5678-3456-789012345678",
+      "name": "Format Final Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3250, 300],
+      "notes": "Create comprehensive output with summary, top 5, raw data, and insights"
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "User Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "User Input": {
+      "main": [
+        [
+          {
+            "node": "Google Autosuggest API",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reddit Search API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Autosuggest API": {
+      "main": [
+        [
+          {
+            "node": "Format Google Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reddit Search API": {
+      "main": [
+        [
+          {
+            "node": "Format Reddit Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Google Data": {
+      "main": [
+        [
+          {
+            "node": "Merge & Rank Problems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Reddit Data": {
+      "main": [
+        [
+          {
+            "node": "Merge & Rank Problems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge & Rank Problems": {
+      "main": [
+        [
+          {
+            "node": "Split Problems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Problems": {
+      "main": [
+        [
+          {
+            "node": "Google Trends API",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Identify Personas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Trends API": {
+      "main": [
+        [
+          {
+            "node": "Extract Trend Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Trend Insights": {
+      "main": [
+        [
+          {
+            "node": "Root Cause Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Identify Personas": {
+      "main": [
+        [
+          {
+            "node": "Root Cause Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Root Cause Analysis": {
+      "main": [
+        [
+          {
+            "node": "Parse Root Causes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Root Causes": {
+      "main": [
+        [
+          {
+            "node": "Match User Strengths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match User Strengths": {
+      "main": [
+        [
+          {
+            "node": "Parse Fit Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Fit Score": {
+      "main": [
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back": {
+      "main": [
+        [
+          {
+            "node": "Split Problems",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Problems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Problems": {
+      "main": [
+        [
+          {
+            "node": "Estimate Competition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Estimate Competition": {
+      "main": [
+        [
+          {
+            "node": "Create Final Recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Final Recommendations": {
+      "main": [
+        [
+          {
+            "node": "Format Final Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-11-19T00:00:00.000Z",
+  "versionId": "1"
+}
