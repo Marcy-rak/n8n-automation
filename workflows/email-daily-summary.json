@@ -1,0 +1,289 @@
+{
+  "name": "Daily Email Summary",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Every Morning at 7 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "id": "schedule-trigger"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 50,
+        "filters": {
+          "labelIds": ["INBOX"],
+          "q": "is:unread label:ToSummarize newer_than:1d"
+        },
+        "format": "resolved"
+      },
+      "name": "Fetch Emails to Summarize",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [450, 300],
+      "id": "fetch-emails",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.length }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "name": "Check if Emails Exist",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "id": "check-emails"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format emails for AI summarization\nconst emails = $input.all();\n\nconst formattedEmails = emails.map((email, index) => {\n  const data = email.json;\n  \n  // Extract email link (Gmail message ID)\n  const messageId = data.id;\n  const emailLink = `https://mail.google.com/mail/u/0/#inbox/${messageId}`;\n  \n  return {\n    number: index + 1,\n    from: data.from?.name || data.from?.address || 'Unknown',\n    fromEmail: data.from?.address || '',\n    subject: data.subject || '(No subject)',\n    snippet: data.snippet || data.textPlain?.substring(0, 200) || '',\n    date: data.date || '',\n    link: emailLink,\n    messageId: messageId\n  };\n});\n\n// Create prompt for AI\nconst emailTexts = formattedEmails.map(email => \n  `Email ${email.number}:\n  From: ${email.from} (${email.fromEmail})\n  Subject: ${email.subject}\n  Preview: ${email.snippet}\n  Link: ${email.link}`\n).join('\\n\\n');\n\nreturn {\n  emails: formattedEmails,\n  totalCount: formattedEmails.length,\n  promptText: emailTexts,\n  date: new Date().toLocaleDateString('en-US', { \n    weekday: 'long', \n    year: 'numeric', \n    month: 'long', \n    day: 'numeric' \n  })\n};"
+      },
+      "name": "Format Emails with Links",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 200],
+      "id": "format-emails"
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert email assistant. Create concise, actionable summaries of emails. For each email:\n1. Summarize the key points in 1-2 sentences\n2. Identify if any action is required\n3. Note priority (High/Medium/Low)\n4. Keep it professional and clear\n\nFormat your response as a structured list with bullet points."
+            },
+            {
+              "role": "user",
+              "content": "=Please summarize these {{ $json.totalCount }} emails from today:\n\n{{ $json.promptText }}\n\nProvide a brief summary for each email, noting any action items or important deadlines."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 1000
+        }
+      },
+      "name": "AI Summarize Emails",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [1050, 200],
+      "id": "ai-summarize",
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "You can replace this with Grok AI if you prefer"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the AI summary and email data\nconst aiSummary = $('AI Summarize Emails').item(0).json.message.content;\nconst emailData = $('Format Emails with Links').item(0).json;\n\n// Create HTML email template\nconst htmlContent = `\n<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"utf-8\">\n  <style>\n    body {\n      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;\n      line-height: 1.6;\n      color: #333;\n      max-width: 800px;\n      margin: 0 auto;\n      padding: 20px;\n      background-color: #f5f5f5;\n    }\n    .container {\n      background-color: white;\n      border-radius: 8px;\n      padding: 30px;\n      box-shadow: 0 2px 4px rgba(0,0,0,0.1);\n    }\n    .header {\n      border-bottom: 3px solid #4CAF50;\n      padding-bottom: 15px;\n      margin-bottom: 25px;\n    }\n    h1 {\n      color: #2c3e50;\n      margin: 0;\n      font-size: 28px;\n    }\n    .date {\n      color: #7f8c8d;\n      font-size: 14px;\n      margin-top: 5px;\n    }\n    .summary-section {\n      background-color: #f8f9fa;\n      border-left: 4px solid #4CAF50;\n      padding: 15px 20px;\n      margin: 20px 0;\n      border-radius: 4px;\n    }\n    .email-list {\n      margin-top: 30px;\n    }\n    .email-item {\n      background-color: #fff;\n      border: 1px solid #e0e0e0;\n      border-radius: 6px;\n      padding: 15px;\n      margin-bottom: 15px;\n      transition: box-shadow 0.2s;\n    }\n    .email-item:hover {\n      box-shadow: 0 2px 8px rgba(0,0,0,0.1);\n    }\n    .email-number {\n      display: inline-block;\n      background-color: #4CAF50;\n      color: white;\n      width: 24px;\n      height: 24px;\n      border-radius: 50%;\n      text-align: center;\n      line-height: 24px;\n      font-size: 12px;\n      font-weight: bold;\n      margin-right: 10px;\n    }\n    .email-subject {\n      font-weight: 600;\n      color: #2c3e50;\n      font-size: 16px;\n      margin-bottom: 5px;\n    }\n    .email-from {\n      color: #7f8c8d;\n      font-size: 13px;\n      margin-bottom: 8px;\n    }\n    .email-snippet {\n      color: #555;\n      font-size: 14px;\n      margin: 8px 0;\n      font-style: italic;\n    }\n    .email-link {\n      display: inline-block;\n      background-color: #4CAF50;\n      color: white !important;\n      text-decoration: none;\n      padding: 8px 16px;\n      border-radius: 4px;\n      font-size: 13px;\n      margin-top: 8px;\n      transition: background-color 0.2s;\n    }\n    .email-link:hover {\n      background-color: #45a049;\n    }\n    .stats {\n      background-color: #e8f5e9;\n      padding: 12px;\n      border-radius: 4px;\n      text-align: center;\n      margin-bottom: 20px;\n      font-weight: 500;\n      color: #2e7d32;\n    }\n    .footer {\n      margin-top: 30px;\n      padding-top: 20px;\n      border-top: 1px solid #e0e0e0;\n      text-align: center;\n      color: #7f8c8d;\n      font-size: 12px;\n    }\n    pre {\n      white-space: pre-wrap;\n      word-wrap: break-word;\n    }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h1>📧 Daily Email Summary</h1>\n      <div class=\"date\">${emailData.date}</div>\n    </div>\n    \n    <div class=\"stats\">\n      📊 ${emailData.totalCount} email${emailData.totalCount !== 1 ? 's' : ''} summarized\n    </div>\n    \n    <div class=\"summary-section\">\n      <h2 style=\"margin-top: 0; color: #2c3e50; font-size: 18px;\">🤖 AI Summary</h2>\n      <pre style=\"margin: 10px 0; font-family: inherit;\">${aiSummary}</pre>\n    </div>\n    \n    <div class=\"email-list\">\n      <h2 style=\"color: #2c3e50; font-size: 18px;\">📬 Individual Emails</h2>\n      ${emailData.emails.map(email => `\n        <div class=\"email-item\">\n          <div>\n            <span class=\"email-number\">${email.number}</span>\n            <span class=\"email-subject\">${email.subject}</span>\n          </div>\n          <div class=\"email-from\">From: ${email.from}</div>\n          <div class=\"email-snippet\">\"${email.snippet}...\"</div>\n          <a href=\"${email.link}\" class=\"email-link\" target=\"_blank\">Open in Gmail →</a>\n        </div>\n      `).join('')}\n    </div>\n    \n    <div class=\"footer\">\n      🤖 Generated automatically by n8n Email Summary Workflow<br>\n      ${new Date().toLocaleString()}\n    </div>\n  </div>\n</body>\n</html>\n`;\n\n// Plain text version\nconst textContent = `\nDAILY EMAIL SUMMARY - ${emailData.date}\n${'='.repeat(60)}\n\nTotal Emails: ${emailData.totalCount}\n\nAI SUMMARY:\n${aiSummary}\n\n${'='.repeat(60)}\nINDIVIDUAL EMAILS:\n\n${emailData.emails.map(email => `\n${email.number}. ${email.subject}\n   From: ${email.from}\n   Link: ${email.link}\n   Preview: ${email.snippet}\n`).join('\\n')}\n\n---\nGenerated by n8n Email Summary Workflow\n${new Date().toLocaleString()}\n`;\n\nreturn {\n  html: htmlContent,\n  text: textContent,\n  subject: `📧 Daily Email Summary - ${emailData.totalCount} emails (${emailData.date})`,\n  emailCount: emailData.totalCount,\n  messageIds: emailData.emails.map(e => e.messageId)\n};"
+      },
+      "name": "Create Summary Email HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 200],
+      "id": "create-html"
+    },
+    {
+      "parameters": {
+        "operation": "sendEmail",
+        "emailType": "html",
+        "toEmail": "={{ $('Fetch Emails to Summarize').item(0).json.to?.address || 'your-email@gmail.com' }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "ccList": "",
+          "bccList": "",
+          "replyTo": ""
+        }
+      },
+      "name": "Send Summary Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1450, 200],
+      "id": "send-email",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $('Send Summary Email').item(0).json.id }}",
+        "labelIds": ["Label_MailSummary"]
+      },
+      "name": "Apply 'Mail Summary' Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1650, 200],
+      "id": "apply-label",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      },
+      "notes": "Create 'Mail Summary' label in Gmail first"
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $item(0, 0).json.id }}",
+        "labelIds": ["INBOX/Processed"]
+      },
+      "name": "Mark Original Emails as Processed",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1650, 350],
+      "id": "mark-processed",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      },
+      "notes": "Optional: Mark original emails as processed"
+    },
+    {
+      "parameters": {},
+      "name": "No Emails Today",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [850, 400],
+      "id": "no-emails"
+    }
+  ],
+  "connections": {
+    "Every Morning at 7 AM": {
+      "main": [
+        [
+          {
+            "node": "Fetch Emails to Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Emails to Summarize": {
+      "main": [
+        [
+          {
+            "node": "Check if Emails Exist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Emails Exist": {
+      "main": [
+        [
+          {
+            "node": "Format Emails with Links",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Emails Today",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Emails with Links": {
+      "main": [
+        [
+          {
+            "node": "AI Summarize Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Summarize Emails": {
+      "main": [
+        [
+          {
+            "node": "Create Summary Email HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Summary Email HTML": {
+      "main": [
+        [
+          {
+            "node": "Send Summary Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Summary Email": {
+      "main": [
+        [
+          {
+            "node": "Apply 'Mail Summary' Label",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Mark Original Emails as Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-19T07:00:00.000Z",
+  "versionId": "1"
+}
