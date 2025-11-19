@@ -1,0 +1,382 @@
+{
+  "name": "Etsy Video Generation - AI (Replicate)",
+  "flow": [
+    {
+      "id": 1,
+      "module": "google-drive:watchFiles",
+      "version": 3,
+      "parameters": {
+        "watch": "myDrive",
+        "folderId": "/Etsy Main Photos",
+        "recursive": false,
+        "fileTypes": "image"
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 0,
+          "y": 0
+        },
+        "restore": {
+          "expect": {
+            "watch": {
+              "label": "My Drive"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "watch",
+            "type": "select",
+            "label": "Watch",
+            "required": true
+          }
+        ],
+        "notes": "Watches for new product images"
+      }
+    },
+    {
+      "id": 2,
+      "module": "google-drive:downloadAFile",
+      "version": 3,
+      "parameters": {
+        "fileId": "{{1.id}}"
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 300,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Downloads main product image"
+      }
+    },
+    {
+      "id": 3,
+      "module": "anthropic:createMessage",
+      "version": 1,
+      "parameters": {
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "temperature": 0.7,
+        "system": "You are a professional video director specializing in product videography. Analyze product images and create optimal video motion prompts."
+      },
+      "mapper": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "base64",
+                  "media_type": "{{2.mimeType}}",
+                  "data": "{{base64(2.data)}}"
+                }
+              },
+              {
+                "type": "text",
+                "text": "Analyze this product image and generate a video motion prompt. Return ONLY a JSON object:\n\n{\n  \"video_prompt\": \"[Detailed description of how the product should move in the video - rotation, zoom, pan, etc.]\",\n  \"motion_intensity\": \"subtle|moderate|dynamic\",\n  \"duration_seconds\": 3,\n  \"style_keywords\": [\"professional\", \"elegant\", \"commercial\"],\n  \"product_type\": \"jewelry|clothing|art|home-decor|accessories|other\"\n}\n\nRules:\n- video_prompt: Detailed camera movement and product motion description\n- motion_intensity: Choose based on product type (jewelry=subtle, clothing=moderate, toys=dynamic)\n- duration_seconds: Keep at 3-5 seconds for cost efficiency\n- style_keywords: 3-5 keywords that describe the video aesthetic\n- product_type: Single category for the product\n\nReturn ONLY the JSON object."
+              }
+            ]
+          }
+        ]
+      },
+      "metadata": {
+        "designer": {
+          "x": 600,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "AI analyzes image and generates video prompt"
+      }
+    },
+    {
+      "id": 4,
+      "module": "util:SetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          {
+            "name": "video_config",
+            "value": "{{parseJSON(3.content[].text)}}"
+          },
+          {
+            "name": "product_id",
+            "value": "{{1.name.split(\"-\")[0]}}"
+          }
+        ],
+        "scope": "roundtrip"
+      },
+      "metadata": {
+        "designer": {
+          "x": 900,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Parse AI response and extract product ID"
+      }
+    },
+    {
+      "id": 5,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": {
+        "handleErrors": true,
+        "useQuerystring": false,
+        "parseResponse": true
+      },
+      "mapper": {
+        "url": "https://api.replicate.com/v1/predictions",
+        "method": "POST",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Token {{YOUR_REPLICATE_API_KEY}}"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": "{\n  \"version\": \"3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438\",\n  \"input\": {\n    \"image\": \"data:{{2.mimeType}};base64,{{base64(2.data)}}\",\n    \"num_frames\": {{if(4.video_config.duration_seconds = 3, 14, if(4.video_config.duration_seconds = 5, 25, 14))}},\n    \"motion_bucket_id\": {{if(4.video_config.motion_intensity = \"subtle\", 100, if(4.video_config.motion_intensity = \"moderate\", 127, 180))}},\n    \"fps\": 6,\n    \"cond_aug\": 0.02,\n    \"decoding_t\": 7\n  }\n}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1200,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Replicate API: Stable Video Diffusion - Creates video from image"
+      }
+    },
+    {
+      "id": 6,
+      "module": "util:Sleep",
+      "version": 1,
+      "parameters": {
+        "delay": 5
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 1500,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Wait 5 seconds before checking status"
+      }
+    },
+    {
+      "id": 7,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": {
+        "handleErrors": true,
+        "useQuerystring": false,
+        "parseResponse": true
+      },
+      "mapper": {
+        "url": "{{5.data.urls.get}}",
+        "method": "GET",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Token {{YOUR_REPLICATE_API_KEY}}"
+          }
+        ]
+      },
+      "metadata": {
+        "designer": {
+          "x": 1800,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Check video generation status"
+      }
+    },
+    {
+      "id": 8,
+      "module": "builtin:Repeater",
+      "version": 1,
+      "parameters": {
+        "repeats": 10
+      },
+      "filter": {
+        "name": "Still processing",
+        "conditions": [
+          [
+            {
+              "a": "{{7.data.status}}",
+              "o": "text:notequal",
+              "b": "succeeded"
+            },
+            {
+              "a": "{{7.data.status}}",
+              "o": "text:notequal",
+              "b": "failed"
+            }
+          ]
+        ]
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 2100,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Retry up to 10 times (3 second intervals)"
+      }
+    },
+    {
+      "id": 9,
+      "module": "util:Sleep",
+      "version": 1,
+      "parameters": {
+        "delay": 3
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 2100,
+          "y": 150
+        },
+        "restore": {},
+        "notes": "Wait 3 seconds between checks"
+      }
+    },
+    {
+      "id": 10,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": {
+        "handleErrors": false,
+        "useQuerystring": false,
+        "parseResponse": true
+      },
+      "mapper": {
+        "url": "{{5.data.urls.get}}",
+        "method": "GET",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Token {{YOUR_REPLICATE_API_KEY}}"
+          }
+        ]
+      },
+      "metadata": {
+        "designer": {
+          "x": 2100,
+          "y": 300
+        },
+        "restore": {},
+        "notes": "Re-check status"
+      }
+    },
+    {
+      "id": 11,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": {
+        "handleErrors": false,
+        "useQuerystring": false,
+        "parseResponse": false,
+        "responseType": "buffer"
+      },
+      "filter": {
+        "name": "Video succeeded",
+        "conditions": [
+          [
+            {
+              "a": "{{if(10.data.status, 10.data.status, 7.data.status)}}",
+              "o": "text:equal",
+              "b": "succeeded"
+            }
+          ]
+        ]
+      },
+      "mapper": {
+        "url": "{{if(10.data.output, 10.data.output, 7.data.output)}}",
+        "method": "GET"
+      },
+      "metadata": {
+        "designer": {
+          "x": 2400,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Download generated video file"
+      }
+    },
+    {
+      "id": 12,
+      "module": "google-drive:uploadAFile",
+      "version": 3,
+      "parameters": {
+        "folderId": "{{YOUR_ETSY_VIDEOS_FOLDER_ID}}",
+        "fileName": "{{4.product_id}}-video.mp4",
+        "uploadType": "simple"
+      },
+      "mapper": {
+        "data": "{{11.data}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 2700,
+          "y": 0
+        },
+        "restore": {},
+        "parameters": [
+          {
+            "name": "folderId",
+            "type": "folder",
+            "label": "Folder",
+            "required": true
+          }
+        ],
+        "notes": "Upload video to Google Drive Etsy Videos folder"
+      }
+    },
+    {
+      "id": 13,
+      "module": "util:SetVariable",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "name": "video_url",
+        "value": "{{12.webViewLink}}",
+        "scope": "roundtrip"
+      },
+      "metadata": {
+        "designer": {
+          "x": 3000,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Store video URL for potential future use"
+      }
+    }
+  ],
+  "metadata": {
+    "instant": true,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false
+    },
+    "designer": {
+      "orphans": []
+    },
+    "zone": "us1.make.com"
+  }
+}

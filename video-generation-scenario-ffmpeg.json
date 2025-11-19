@@ -1,0 +1,222 @@
+{
+  "name": "Etsy Video Generation - FFmpeg Slideshow (Ultra Low Cost)",
+  "flow": [
+    {
+      "id": 1,
+      "module": "google-drive:watchFiles",
+      "version": 3,
+      "parameters": {
+        "watch": "myDrive",
+        "folderId": "/Etsy Main Photos",
+        "recursive": false,
+        "fileTypes": "image"
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 0,
+          "y": 0
+        },
+        "restore": {
+          "expect": {
+            "watch": {
+              "label": "My Drive"
+            }
+          }
+        },
+        "notes": "Watches for new product images"
+      }
+    },
+    {
+      "id": 2,
+      "module": "google-drive:downloadAFile",
+      "version": 3,
+      "parameters": {
+        "fileId": "{{1.id}}"
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": {
+          "x": 300,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Downloads main product image"
+      }
+    },
+    {
+      "id": 3,
+      "module": "anthropic:createMessage",
+      "version": 1,
+      "parameters": {
+        "model": "claude-3-5-haiku-20241022",
+        "max_tokens": 512,
+        "temperature": 0.7,
+        "system": "You are an expert at creating engaging product video text overlays. Generate concise, compelling text for video slides."
+      },
+      "mapper": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "base64",
+                  "media_type": "{{2.mimeType}}",
+                  "data": "{{base64(2.data)}}"
+                }
+              },
+              {
+                "type": "text",
+                "text": "Analyze this product and create text overlays for a 6-second video slideshow. Return ONLY a JSON object:\n\n{\n  \"slide1_text\": \"[Main product name/benefit - 3-5 words]\",\n  \"slide2_text\": \"[Key feature - 3-5 words]\",\n  \"slide3_text\": \"[Call to action - 3-5 words]\",\n  \"product_name\": \"[Short product name]\"\n}\n\nExamples:\n- slide1_text: \"Handmade Silver Jewelry\"\n- slide2_text: \"Premium Quality Materials\"\n- slide3_text: \"Shop Now on Etsy\"\n\nReturn ONLY the JSON object."
+              }
+            ]
+          }
+        ]
+      },
+      "metadata": {
+        "designer": {
+          "x": 600,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "AI generates text overlays for video slides (uses cheaper Haiku model)"
+      }
+    },
+    {
+      "id": 4,
+      "module": "util:SetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          {
+            "name": "video_text",
+            "value": "{{parseJSON(3.content[].text)}}"
+          },
+          {
+            "name": "product_id",
+            "value": "{{1.name.split(\"-\")[0]}}"
+          },
+          {
+            "name": "temp_dir",
+            "value": "/tmp/video_{{now}}"
+          }
+        ],
+        "scope": "roundtrip"
+      },
+      "metadata": {
+        "designer": {
+          "x": 900,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Parse AI response and set variables"
+      }
+    },
+    {
+      "id": 5,
+      "module": "util:TextComposer",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "text": "#!/bin/bash\nset -e\n\n# Create temp directory\nmkdir -p {{4.temp_dir}}\n\n# Save original image\necho '{{base64(2.data)}}' | base64 -d > {{4.temp_dir}}/original.jpg\n\n# Create 3 variations with ImageMagick (zoom, text overlays)\n# Slide 1: Zoom in effect\nconvert {{4.temp_dir}}/original.jpg -resize 1280x720^ -gravity center -extent 1280x720 {{4.temp_dir}}/frame1.jpg\n\n# Slide 2: With text overlay\nconvert {{4.temp_dir}}/original.jpg -resize 1280x720^ -gravity center -extent 1280x720 \\\n  -fill white -stroke black -strokewidth 2 -pointsize 60 -gravity center \\\n  -annotate +0+0 '{{4.video_text.slide1_text}}' {{4.temp_dir}}/frame2.jpg\n\n# Slide 3: With feature text\nconvert {{4.temp_dir}}/original.jpg -resize 1280x720^ -gravity center -extent 1280x720 \\\n  -fill white -stroke black -strokewidth 2 -pointsize 50 -gravity center \\\n  -annotate +0+0 '{{4.video_text.slide2_text}}' {{4.temp_dir}}/frame3.jpg\n\n# Slide 4: Call to action\nconvert {{4.temp_dir}}/original.jpg -resize 1280x720^ -gravity center -extent 1280x720 \\\n  -fill '#FFD700' -stroke black -strokewidth 3 -pointsize 55 -gravity center \\\n  -annotate +0+0 '{{4.video_text.slide3_text}}' {{4.temp_dir}}/frame4.jpg\n\n# Create video with FFmpeg (crossfade transitions)\nffmpeg -y \\\n  -loop 1 -t 1.5 -i {{4.temp_dir}}/frame1.jpg \\\n  -loop 1 -t 1.5 -i {{4.temp_dir}}/frame2.jpg \\\n  -loop 1 -t 1.5 -i {{4.temp_dir}}/frame3.jpg \\\n  -loop 1 -t 1.5 -i {{4.temp_dir}}/frame4.jpg \\\n  -filter_complex \"\n    [0:v]fade=t=in:st=0:d=0.3,fade=t=out:st=1.2:d=0.3,zoompan=z='min(zoom+0.0015,1.1)':d=1:fps=30[v0];\n    [1:v]fade=t=in:st=0:d=0.3,fade=t=out:st=1.2:d=0.3[v1];\n    [2:v]fade=t=in:st=0:d=0.3,fade=t=out:st=1.2:d=0.3[v2];\n    [3:v]fade=t=in:st=0:d=0.3,fade=t=out:st=1.2:d=0.3[v3];\n    [v0][v1][v2][v3]concat=n=4:v=1:a=0[outv]\n  \" \\\n  -map \"[outv]\" \\\n  -c:v libx264 -pix_fmt yuv420p -crf 23 \\\n  -movflags +faststart \\\n  {{4.temp_dir}}/output.mp4\n\n# Output base64 encoded video\nbase64 -w 0 {{4.temp_dir}}/output.mp4\n\n# Cleanup\nrm -rf {{4.temp_dir}}\n"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1200,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Generate FFmpeg script for video creation"
+      }
+    },
+    {
+      "id": 6,
+      "module": "util:ExecuteShellScript",
+      "version": 1,
+      "parameters": {
+        "timeout": 30000
+      },
+      "mapper": {
+        "script": "{{5.text}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1500,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Execute FFmpeg video generation (requires Make.com private cloud or custom module)"
+      }
+    },
+    {
+      "id": 7,
+      "module": "util:TextParser",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "pattern": ".*",
+        "text": "{{6.stdout}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 1800,
+          "y": 0
+        },
+        "restore": {},
+        "notes": "Extract base64 video output"
+      }
+    },
+    {
+      "id": 8,
+      "module": "google-drive:uploadAFile",
+      "version": 3,
+      "parameters": {
+        "folderId": "{{YOUR_ETSY_VIDEOS_FOLDER_ID}}",
+        "fileName": "{{4.product_id}}-video.mp4",
+        "uploadType": "simple"
+      },
+      "mapper": {
+        "data": "{{base64(7.text)}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 2100,
+          "y": 0
+        },
+        "restore": {},
+        "parameters": [
+          {
+            "name": "folderId",
+            "type": "folder",
+            "label": "Folder",
+            "required": true
+          }
+        ],
+        "notes": "Upload video to Google Drive"
+      }
+    }
+  ],
+  "metadata": {
+    "instant": true,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false
+    },
+    "designer": {
+      "orphans": []
+    },
+    "zone": "us1.make.com",
+    "notes": "NOTE: This scenario requires Make.com with shell script execution capability (private cloud or custom app). For standard Make.com cloud, use the Replicate AI version instead."
+  }
+}
